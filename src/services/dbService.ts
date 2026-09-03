@@ -13,7 +13,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { Product, Customer, StaffMember, Order, AuditLog, SystemSettings, ShiftReportData } from '../types';
+import { Product, PublicProductProjection, Customer, StaffMember, Order, AuditLog, SystemSettings, ShiftReportData } from '../types';
 import { 
   INITIAL_PRODUCTS, 
   INITIAL_CUSTOMERS, 
@@ -25,8 +25,10 @@ import {
 // Firestore collection names
 export const COLLECTIONS = {
   PRODUCTS: 'products',
+  PUBLIC_PRODUCTS: 'public_products',
   CUSTOMERS: 'customers',
   STAFF: 'staff',
+  STAFF_CREDENTIALS: 'staff_credentials',
   ORDERS: 'orders',
   AUDIT_LOGS: 'audit_logs',
   SETTINGS: 'settings',
@@ -277,10 +279,13 @@ export async function seedInitialFirestoreData(): Promise<{ seeded: boolean; mes
     console.info('Database ready. Seeding initial Firestore collections...');
     const batch = writeBatch(db);
 
-    // Seed products
+    // Seed products & public catalog projection
     INITIAL_PRODUCTS.forEach(p => {
       const pRef = doc(db, COLLECTIONS.PRODUCTS, p.id);
       batch.set(pRef, p);
+
+      const pubRef = doc(db, COLLECTIONS.PUBLIC_PRODUCTS, p.id);
+      batch.set(pubRef, projectPublicProduct(p));
     });
 
     // Seed customers
@@ -323,6 +328,46 @@ export async function seedInitialFirestoreData(): Promise<{ seeded: boolean; mes
 }
 
 /**
+ * Public Catalog Projection Helper:
+ * Strips confidential costs, suppliers, internal reorder levels, and tracking numbers.
+ */
+export function projectPublicProduct(p: Product): PublicProductProjection {
+  return {
+    id: p.id,
+    name: p.name,
+    sku: p.sku,
+    price: p.price,
+    stock: p.stock,
+    category: p.category,
+    imageUrl: p.imageUrl,
+    description: p.description,
+    brand: p.brand,
+    model: p.model,
+    rating: p.rating,
+    reviewCount: p.reviewCount,
+    originalPrice: p.originalPrice,
+    discountPercent: p.discountPercent,
+    isNewArrival: p.isNewArrival,
+    isBestSeller: p.isBestSeller,
+    isFeatured: p.isFeatured,
+    images: p.images,
+    specifications: p.specifications,
+    reviews: p.reviews,
+    unit: p.unit,
+    publishOnline: p.publishOnline !== false,
+    variants: p.variants?.map(v => ({
+      sku: v.sku,
+      size: v.size,
+      color: v.color,
+      stock: v.stock,
+      retailPrice: v.retailPrice || p.price,
+      imageUrl: v.imageUrl,
+      isActive: v.isActive
+    }))
+  };
+}
+
+/**
  * Product Database Operations
  */
 export function subscribeProducts(onUpdate: (products: Product[]) => void, onError?: (err: any) => void) {
@@ -343,10 +388,37 @@ export function subscribeProducts(onUpdate: (products: Product[]) => void, onErr
   });
 }
 
+/**
+ * Public Storefront Catalog Projection Subscription (Safe for unauthenticated visitors)
+ */
+export function subscribePublicProducts(onUpdate: (products: PublicProductProjection[]) => void, onError?: (err: any) => void) {
+  const colRef = collection(db, COLLECTIONS.PUBLIC_PRODUCTS);
+  return onSnapshot(colRef, (snapshot) => {
+    if (!snapshot.empty) {
+      const prods: PublicProductProjection[] = [];
+      snapshot.forEach(docSnap => {
+        prods.push(docSnap.data() as PublicProductProjection);
+      });
+      onUpdate(prods);
+    } else {
+      onUpdate([]);
+    }
+  }, (err) => {
+    handleFirestoreError(err, OperationType.LIST, COLLECTIONS.PUBLIC_PRODUCTS);
+    if (onError) onError(err);
+  });
+}
+
 export async function saveProductToDB(product: Product): Promise<void> {
   try {
     const docRef = doc(db, COLLECTIONS.PRODUCTS, product.id);
     await setDoc(docRef, product, { merge: true });
+
+    // Synchronize public catalog projection if published online
+    if (product.publishOnline !== false) {
+      const pubDocRef = doc(db, COLLECTIONS.PUBLIC_PRODUCTS, product.id);
+      await setDoc(pubDocRef, projectPublicProduct(product), { merge: true });
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${COLLECTIONS.PRODUCTS}/${product.id}`);
   }
@@ -356,6 +428,10 @@ export async function deleteProductFromDB(productId: string): Promise<void> {
   try {
     const docRef = doc(db, COLLECTIONS.PRODUCTS, productId);
     await deleteDoc(docRef);
+
+    // Also remove from public catalog projection
+    const pubDocRef = doc(db, COLLECTIONS.PUBLIC_PRODUCTS, productId);
+    await deleteDoc(pubDocRef).catch(() => {});
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `${COLLECTIONS.PRODUCTS}/${productId}`);
   }

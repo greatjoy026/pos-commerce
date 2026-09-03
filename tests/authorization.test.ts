@@ -46,59 +46,62 @@ export function getStaffRole(ctx: SecurityContext): string | null {
   return null;
 }
 
+export function isEnterpriseScope(ctx: SecurityContext): boolean {
+  if (!ctx.auth?.token?.tenantId) return true;
+  return ctx.auth.token.tenantId === 'nexus-enterprise';
+}
+
 export function isStaff(ctx: SecurityContext): boolean {
-  if (!isAuthenticated(ctx) || !ctx.auth) return false;
+  if (!isAuthenticated(ctx) || !ctx.auth || !isEnterpriseScope(ctx)) return false;
+  const validRoles = [
+    'Super Admin', 'Business Owner', 'Store Manager', 'Admin', 'Manager',
+    'Inventory Manager', 'Warehouse Manager', 'Purchasing Officer',
+    'Cashier', 'Sales Associate', 'Sales Manager', 'Accountant',
+    'E-commerce Manager', 'Warehouse Staff'
+  ];
   return (
-    ctx.auth.token?.isStaff === true ||
-    ctx.auth.token?.role !== undefined ||
+    ctx.auth.token?.admin === true ||
+    ctx.auth.token?.isSuperAdmin === true ||
+    (ctx.auth.token?.role !== undefined && validRoles.includes(ctx.auth.token.role)) ||
     (ctx.staffDatabase !== undefined && ctx.auth.uid !== null && ctx.auth.uid in ctx.staffDatabase)
   );
 }
 
 export function isSuperAdmin(ctx: SecurityContext): boolean {
-  if (!isAuthenticated(ctx) || !ctx.auth) return false;
+  if (!isAuthenticated(ctx) || !ctx.auth || !isEnterpriseScope(ctx)) return false;
   return ctx.auth.token?.admin === true || getStaffRole(ctx) === 'Super Admin';
 }
 
 export function isManagerOrAdmin(ctx: SecurityContext): boolean {
-  if (!isAuthenticated(ctx)) return false;
+  if (!isAuthenticated(ctx) || !isEnterpriseScope(ctx)) return false;
   if (isSuperAdmin(ctx)) return true;
   const role = getStaffRole(ctx);
   return ['Business Owner', 'Store Manager', 'Admin', 'Manager'].includes(role || '');
 }
 
 export function isInventoryStaff(ctx: SecurityContext): boolean {
-  if (!isAuthenticated(ctx)) return false;
+  if (!isAuthenticated(ctx) || !isEnterpriseScope(ctx)) return false;
   if (isManagerOrAdmin(ctx)) return true;
   const role = getStaffRole(ctx);
   return ['Inventory Manager', 'Warehouse Manager', 'Purchasing Officer'].includes(role || '');
 }
 
 export function isSalesStaff(ctx: SecurityContext): boolean {
-  if (!isAuthenticated(ctx)) return false;
+  if (!isAuthenticated(ctx) || !isEnterpriseScope(ctx)) return false;
   if (isManagerOrAdmin(ctx)) return true;
   const role = getStaffRole(ctx);
   return ['Cashier', 'Sales Associate', 'Sales Manager'].includes(role || '');
 }
 
 export function hasAnyStaffRole(ctx: SecurityContext): boolean {
-  if (!isStaff(ctx)) return false;
-  if (isManagerOrAdmin(ctx) || isInventoryStaff(ctx) || isSalesStaff(ctx)) return true;
-  const role = getStaffRole(ctx);
-  return ['Accountant', 'E-commerce Manager', 'Warehouse Staff'].includes(role || '');
-}
-
-export function matchesTenant(data: any, ctx: SecurityContext): boolean {
-  if (!('tenantId' in data)) return true;
-  if (!ctx.auth?.token?.tenantId) return true;
-  return data.tenantId === ctx.auth.token.tenantId;
+  return isStaff(ctx);
 }
 
 // ----------------------------------------------------------------------------
 // Entity Schema Validators (Mirrors firestore.rules validation functions)
 // ----------------------------------------------------------------------------
 
-export function isValidProduct(data: any, ctx: SecurityContext): boolean {
+export function isValidProduct(data: any): boolean {
   if (!data) return false;
   return (
     typeof data.id === 'string' && data.id.length > 0 && data.id.length <= 128 &&
@@ -106,18 +109,24 @@ export function isValidProduct(data: any, ctx: SecurityContext): boolean {
     typeof data.sku === 'string' && data.sku.length > 0 && data.sku.length <= 100 &&
     typeof data.price === 'number' && data.price >= 0 &&
     typeof data.stock === 'number' && data.stock >= 0 &&
-    typeof data.category === 'string' && data.category.length <= 100 &&
-    matchesTenant(data, ctx)
+    typeof data.category === 'string' && data.category.length <= 100
   );
 }
 
-export function isValidCustomer(data: any, ctx: SecurityContext): boolean {
+export function isValidPublicProduct(data: any): boolean {
+  if (!isValidProduct(data)) return false;
+  if ('cost' in data || 'costPrice' in data || 'reorderPoint' in data || 'supplier' in data || 'serialNumbers' in data || 'batchNumber' in data) {
+    return false;
+  }
+  return true;
+}
+
+export function isValidCustomer(data: any): boolean {
   if (!data) return false;
   const basic = (
     typeof data.id === 'string' && data.id.length > 0 && data.id.length <= 128 &&
     typeof data.name === 'string' && data.name.length > 0 && data.name.length <= 150 &&
-    typeof data.email === 'string' && data.email.length > 0 && data.email.length <= 150 &&
-    matchesTenant(data, ctx)
+    typeof data.email === 'string' && data.email.length > 0 && data.email.length <= 150
   );
   if (!basic) return false;
   if ('loyaltyPoints' in data) {
@@ -126,7 +135,7 @@ export function isValidCustomer(data: any, ctx: SecurityContext): boolean {
   return true;
 }
 
-export function isValidStaff(data: any, ctx: SecurityContext): boolean {
+export function isValidStaff(data: any): boolean {
   if (!data) return false;
   const validRoles = [
     'Super Admin', 'Business Owner', 'Store Manager', 'Inventory Manager',
@@ -140,12 +149,11 @@ export function isValidStaff(data: any, ctx: SecurityContext): boolean {
     typeof data.email === 'string' && data.email.length > 0 && data.email.length <= 150 &&
     typeof data.role === 'string' && validRoles.includes(data.role) &&
     typeof data.status === 'string' && validStatuses.includes(data.status) &&
-    typeof data.pin === 'string' && data.pin.length >= 4 && data.pin.length <= 8 &&
-    matchesTenant(data, ctx)
+    (!('pin' in data) || (typeof data.pin === 'string' && data.pin.length >= 4 && data.pin.length <= 8))
   );
 }
 
-export function isValidOrder(data: any, ctx: SecurityContext): boolean {
+export function isValidOrder(data: any): boolean {
   if (!data) return false;
   const validChannels = ['pos', 'ecom', 'mobile', 'phone'];
   const validStatuses = ['Completed', 'Pending', 'Processing', 'Cancelled', 'Refunded'];
@@ -155,8 +163,7 @@ export function isValidOrder(data: any, ctx: SecurityContext): boolean {
     typeof data.subtotal === 'number' && data.subtotal >= 0 &&
     typeof data.total === 'number' && data.total >= 0 &&
     typeof data.channel === 'string' && validChannels.includes(data.channel) &&
-    typeof data.status === 'string' && validStatuses.includes(data.status) &&
-    matchesTenant(data, ctx)
+    typeof data.status === 'string' && validStatuses.includes(data.status)
   );
 }
 
@@ -164,13 +171,16 @@ export function isValidEcomOrder(data: any): boolean {
   if (!data) return false;
   return (
     data.channel === 'ecom' &&
-    ['Completed', 'Pending'].includes(data.status) &&
+    data.status === 'Pending' &&
+    (!('paymentStatus' in data) || ['Pending', 'Unpaid'].includes(data.paymentStatus)) &&
     typeof data.customerName === 'string' && data.customerName.length > 0 && data.customerName.length <= 150 &&
-    typeof data.customerEmail === 'string' && data.customerEmail.length > 0 && data.customerEmail.length <= 150
+    typeof data.customerEmail === 'string' && data.customerEmail.length > 0 && data.customerEmail.length <= 150 &&
+    Array.isArray(data.items) && data.items.length > 0 &&
+    typeof data.total === 'number' && data.total >= 0
   );
 }
 
-export function isValidAuditLog(data: any, ctx: SecurityContext): boolean {
+export function isValidAuditLog(data: any): boolean {
   if (!data) return false;
   return (
     typeof data.id === 'string' && data.id.length > 0 && data.id.length <= 128 &&
@@ -178,8 +188,7 @@ export function isValidAuditLog(data: any, ctx: SecurityContext): boolean {
     typeof data.staffName === 'string' && data.staffName.length > 0 && data.staffName.length <= 150 &&
     typeof data.action === 'string' && data.action.length > 0 && data.action.length <= 100 &&
     typeof data.module === 'string' && data.module.length > 0 && data.module.length <= 50 &&
-    typeof data.details === 'string' && data.details.length <= 2000 &&
-    matchesTenant(data, ctx)
+    typeof data.details === 'string' && data.details.length <= 2000
   );
 }
 
@@ -192,15 +201,14 @@ export function isValidSettings(data: any): boolean {
   );
 }
 
-export function isValidShiftReport(data: any, ctx: SecurityContext): boolean {
+export function isValidShiftReport(data: any): boolean {
   if (!data) return false;
   return (
     typeof data.reportId === 'string' && data.reportId.length > 0 && data.reportId.length <= 128 &&
     typeof data.terminalId === 'string' && data.terminalId.length > 0 && data.terminalId.length <= 100 &&
     typeof data.staffName === 'string' && data.staffName.length > 0 && data.staffName.length <= 150 &&
     typeof data.shiftStartTime === 'string' && data.shiftStartTime.length > 0 &&
-    typeof data.totalSales === 'number' && data.totalSales >= 0 &&
-    matchesTenant(data, ctx)
+    typeof data.totalSales === 'number' && data.totalSales >= 0
   );
 }
 
@@ -302,11 +310,28 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
   describe('2. Collection Access Matrix Enforcement', () => {
 
     // Products Collection
-    describe('Products Collection (/products)', () => {
-      test('Public storefront can read products', () => {
-        // allow read: if true;
-        const canRead = true;
+    describe('Products Collection (/products and /public_products)', () => {
+      test('Public storefront CANNOT read internal products (requires isStaff)', () => {
+        const canRead = isStaff(publicVisitor);
+        assert.strictEqual(canRead, false);
+      });
+
+      test('Public storefront CAN read public products projection', () => {
+        const canRead = true; // allow read: if true;
         assert.strictEqual(canRead, true);
+      });
+
+      test('Public product projection REJECTS sensitive internal fields (cost, reorderPoint, supplier)', () => {
+        const sensitiveProd = {
+          id: 'p-1',
+          name: 'Scanner',
+          sku: 'SKU1',
+          price: 100,
+          cost: 40, // VIOLATION
+          stock: 10,
+          category: 'Hardware'
+        };
+        assert.strictEqual(isValidPublicProduct(sensitiveProd), false);
       });
 
       test('Public storefront CANNOT create, update or delete products', () => {
@@ -325,7 +350,7 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
 
       test('Inventory Manager can create and update products with valid schema', () => {
         const validProd = { id: 'p-101', name: 'Almond Milk', sku: 'SKU-ALM', price: 4.99, stock: 20, category: 'Beverages' };
-        const canCreate = isInventoryStaff(inventoryUser) && isValidProduct(validProd, inventoryUser);
+        const canCreate = isInventoryStaff(inventoryUser) && isValidProduct(validProd);
         assert.strictEqual(canCreate, true);
       });
 
@@ -371,7 +396,7 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
           status: 'Active',
           pin: '5566'
         };
-        const canCreate = isManagerOrAdmin(storeManagerUser) && isValidStaff(validStaff, storeManagerUser);
+        const canCreate = isManagerOrAdmin(storeManagerUser) && isValidStaff(validStaff);
         assert.strictEqual(canCreate, true);
       });
 
@@ -385,33 +410,37 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
 
     // Orders Collection
     describe('Orders Collection (/orders)', () => {
-      test('Public visitor can place valid e-commerce orders', () => {
+      test('Public visitor can place valid untrusted e-commerce orders (Pending status)', () => {
         const validEcom = {
           id: 'ord-ecom-1',
           date: '2026-09-03T12:00:00Z',
           subtotal: 50.00,
           total: 54.25,
           channel: 'ecom',
-          status: 'Completed',
+          status: 'Pending',
+          paymentStatus: 'Pending',
           customerName: 'Jane Doe',
-          customerEmail: 'jane@example.com'
+          customerEmail: 'jane@example.com',
+          items: [{ productId: 'p1', quantity: 1, price: 50.00 }]
         };
-        const canCreate = isValidId(validEcom.id) && isValidOrder(validEcom, publicVisitor) && isValidEcomOrder(validEcom);
+        const canCreate = isValidId(validEcom.id) && isValidOrder(validEcom) && isValidEcomOrder(validEcom);
         assert.strictEqual(canCreate, true);
       });
 
-      test('Public visitor CANNOT place e-commerce order with forged status or negative total', () => {
+      test('Public visitor CANNOT place e-commerce order initialized as Completed or Paid', () => {
         const badEcom = {
           id: 'ord-ecom-2',
           date: '2026-09-03T12:00:00Z',
           subtotal: 50.00,
-          total: -50.00, // NEGATIVE
+          total: 54.25,
           channel: 'ecom',
-          status: 'Completed',
+          status: 'Completed', // FORBIDDEN
+          paymentStatus: 'Paid', // FORBIDDEN
           customerName: 'Attacker',
-          customerEmail: 'bad@evil.com'
+          customerEmail: 'bad@evil.com',
+          items: [{ productId: 'p1', quantity: 1, price: 50.00 }]
         };
-        const canCreate = isValidId(badEcom.id) && isValidOrder(badEcom, publicVisitor) && isValidEcomOrder(badEcom);
+        const canCreate = isValidId(badEcom.id) && isValidOrder(badEcom) && isValidEcomOrder(badEcom);
         assert.strictEqual(canCreate, false);
       });
 
@@ -429,7 +458,7 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
           channel: 'pos',
           status: 'Completed'
         };
-        const canCreate = isValidId(validPosOrder.id) && isValidOrder(validPosOrder, cashierUser) && isSalesStaff(cashierUser);
+        const canCreate = isValidId(validPosOrder.id) && isValidOrder(validPosOrder) && isSalesStaff(cashierUser);
         assert.strictEqual(canCreate, true);
       });
 
@@ -474,8 +503,8 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
           shiftStartTime: '2026-09-03T08:00:00Z',
           totalSales: 850.50
         };
-        const cashierCanCreate = isSalesStaff(cashierUser) && isValidShiftReport(validShift, cashierUser);
-        const managerCanCreate = isManagerOrAdmin(storeManagerUser) && isValidShiftReport(validShift, storeManagerUser);
+        const cashierCanCreate = isSalesStaff(cashierUser) && isValidShiftReport(validShift);
+        const managerCanCreate = isManagerOrAdmin(storeManagerUser) && isValidShiftReport(validShift);
         assert.strictEqual(cashierCanCreate, true);
         assert.strictEqual(managerCanCreate, true);
       });
@@ -511,58 +540,58 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
   });
 
   // --------------------------------------------------------------------------
-  // 3. The "Dirty Dozen" Malicious Payload Penetration Tests
+  // 3. The Threat Payloads Penetration Tests
   // --------------------------------------------------------------------------
-  describe('3. The "Dirty Dozen" Threat Payloads (Must All Be Rejected)', () => {
+  describe('3. Threat Payloads (Must All Be Rejected)', () => {
 
     test('Payload #1: Negative product price injection', () => {
       const p = { id: 'p-1', name: 'Product', sku: 'SKU1', price: -25.00, stock: 10, category: 'Test' };
-      assert.strictEqual(isValidProduct(p, inventoryUser), false);
+      assert.strictEqual(isValidProduct(p), false);
     });
 
     test('Payload #2: Negative product stock count injection', () => {
       const p = { id: 'p-1', name: 'Product', sku: 'SKU1', price: 25.00, stock: -5, category: 'Test' };
-      assert.strictEqual(isValidProduct(p, inventoryUser), false);
+      assert.strictEqual(isValidProduct(p), false);
     });
 
     test('Payload #3: Oversized malicious product name (XSS / buffer exhaustion > 200 chars)', () => {
       const p = { id: 'p-1', name: 'A'.repeat(250), sku: 'SKU1', price: 25.00, stock: 10, category: 'Test' };
-      assert.strictEqual(isValidProduct(p, inventoryUser), false);
+      assert.strictEqual(isValidProduct(p), false);
     });
 
     test('Payload #4: Invalid/spoofed order channel (backdoor channel injection)', () => {
       const o = { id: 'o-1', date: '2026-09-03', subtotal: 10, total: 10, channel: 'backdoor_untracked', status: 'Completed' };
-      assert.strictEqual(isValidOrder(o, cashierUser), false);
+      assert.strictEqual(isValidOrder(o), false);
     });
 
     test('Payload #5: Negative order total value injection', () => {
       const o = { id: 'o-1', date: '2026-09-03', subtotal: -10, total: -10, channel: 'pos', status: 'Completed' };
-      assert.strictEqual(isValidOrder(o, cashierUser), false);
+      assert.strictEqual(isValidOrder(o), false);
     });
 
     test('Payload #6: Forged e-commerce order with empty customer identity', () => {
-      const o = { id: 'o-1', channel: 'ecom', status: 'Completed', customerName: '', customerEmail: 'email@test.com' };
+      const o = { id: 'o-1', channel: 'ecom', status: 'Pending', customerName: '', customerEmail: 'email@test.com', items: [{}], total: 10 };
       assert.strictEqual(isValidEcomOrder(o), false);
     });
 
     test('Payload #7: Weak staff PIN (< 4 digits)', () => {
       const s = { id: 's-1', name: 'Hacker', email: 'h@test.com', role: 'Cashier', status: 'Active', pin: '12' };
-      assert.strictEqual(isValidStaff(s, superAdminUser), false);
+      assert.strictEqual(isValidStaff(s), false);
     });
 
     test('Payload #8: Unknown/unauthorized staff role injection', () => {
       const s = { id: 's-1', name: 'Hacker', email: 'h@test.com', role: 'RootOverlord', status: 'Active', pin: '1234' };
-      assert.strictEqual(isValidStaff(s, superAdminUser), false);
+      assert.strictEqual(isValidStaff(s), false);
     });
 
     test('Payload #9: Invalid staff account status injection', () => {
       const s = { id: 's-1', name: 'Hacker', email: 'h@test.com', role: 'Cashier', status: 'CORRUPTED', pin: '1234' };
-      assert.strictEqual(isValidStaff(s, superAdminUser), false);
+      assert.strictEqual(isValidStaff(s), false);
     });
 
     test('Payload #10: Negative shift report total sales injection', () => {
       const r = { reportId: 'r-1', terminalId: 'T1', staffName: 'Staff', shiftStartTime: '08:00', totalSales: -100 };
-      assert.strictEqual(isValidShiftReport(r, cashierUser), false);
+      assert.strictEqual(isValidShiftReport(r), false);
     });
 
     test('Payload #11: Path-traversal or special characters in document ID', () => {

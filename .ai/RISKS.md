@@ -17,6 +17,7 @@
 * **Severity**: **HIGH (P1)**
 * **Category**: Data Integrity / Maintainability
 * **Identified in**: `src/types.ts` (`Product`, `ProductPackagingConfig`, `PackagingUnitsConfig`, `BulkPackagingConfig`)
+* **Status**: `OPEN / UNRESOLVED` — Pending `PROD-001`.
 * **Description**: Multiple parallel representations of packaging, variants, and inventory tracking exist across different versions of the product interface. Different components access different fields (e.g. `packaging.unitsPerPackage` vs `packagingUnits[].multiplier`).
 * **Impact**: Inconsistent updates, subtle inventory calculation discrepancies, and maintenance friction as new product types are introduced.
 * **Required Follow-up Task**: `PROD-001 — Product Domain Normalization`.
@@ -27,6 +28,7 @@
 * **Severity**: **HIGH (P1)**
 * **Category**: Inventory Accounting / Financial Integrity
 * **Identified in**: `src/App.tsx` (`handleProcessOrder`, `handleQuickReorder`)
+* **Status**: `OPEN / UNRESOLVED` — Pending `INV-001`.
 * **Description**: Inventory deduction logic is currently embedded directly in UI state handlers in `App.tsx`. Stock is mutated as a plain integer rather than generated via immutable stock ledger movements. Serial and batch tracking are defined in interfaces but not enforced during POS checkout.
 * **Impact**: Inability to perform financial inventory valuation audits (FIFO/LIFO), lack of auditability for shrinkage, and risk of negative stock during concurrent checkouts.
 * **Required Follow-up Task**: `INV-001 — SKU and Inventory Architecture`.
@@ -37,6 +39,7 @@
 * **Severity**: **MEDIUM / HIGH**
 * **Category**: Architectural Consistency
 * **Identified in**: `src/App.tsx` (`handleProcessOrder` vs `handlePlaceEcomOrder`)
+* **Status**: `OPEN / UNRESOLVED` — Pending `POS-001` & `ECOM-001`.
 * **Description**: Both handlers duplicate packaging multiplier calculations, variant deductions, and loyalty point allocations with subtle differences in error handling and audit logging.
 * **Impact**: Behavioral divergence between in-store sales and online purchases over time.
 * **Required Follow-up Task**: `POS-001` & `ECOM-001`.
@@ -70,10 +73,10 @@
 * **Severity**: **HIGH**
 * **Category**: Credential Security
 * **Identified in**: `src/types.ts` (`StaffMember.pin`), `src/data/mockData.ts`
-* **Status**: `MITIGATED (SEC-001)` — Public and unauthenticated read access to the `/staff` collection is now strictly blocked by Firestore rules (`allow get, list: if isAuthenticated() && hasAnyStaffRole()`). Unauthenticated clients and customers cannot read staff profiles or inspect PINs.
-* **Description**: Staff PIN codes were previously exposed via open client reads. Access is now gated strictly behind authenticated staff sessions.
-* **Impact**: Mitigated at the Firestore security boundary. Next phase can introduce Argon2/bcrypt PIN hashing.
-* **Required Follow-up Task**: Completed under `SEC-001`.
+* **Status**: `PARTIALLY MITIGATED (NOT RESOLVED)` — Public and unauthenticated read access to the `/staff` collection is now strictly blocked by Firestore rules (`allow get, list: if isAuthenticated() && hasAnyStaffRole()`). In addition, the `/staff_credentials` collection has been established with all client-side reads denied (`allow read: if false;`). However, full resolution requires complete elimination of plaintext PIN properties and implementing Argon2/bcrypt password/PIN hashing in a dedicated future credential refactoring task. RISK-007 is NOT resolved.
+* **Description**: Staff PIN codes were previously exposed via open client reads. Access is now gated strictly behind authenticated staff sessions, and the `/staff_credentials` vault is isolated. Plaintext PINs must still be replaced with one-way cryptographic hashes.
+* **Impact**: Surface-level boundary mitigation achieved; complete credential hardening remains an open task.
+* **Required Follow-up Task**: Future Credential Security Refactoring.
 
 ---
 

@@ -8,7 +8,14 @@
 * **Owner**: Gemini (Implementation Lead)
 * **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
 * **Dependencies**: `ARCH-001`
-* **Objective**: Replaced insecure `isValidId(documentId)` rules in `firestore.rules` with server-enforced authenticated RBAC, public e-commerce safety rules, immutable audit ledgers, and mapped `/shift_reports/{shiftId}` in blueprint and rules. Deployed rules to Firebase and verified with 44 automated tests.
+* **Objective**: Replaced insecure `isValidId(documentId)` rules in `firestore.rules` with a hardened server-enforced authorization system. Completed supervisor correction requirements SEC-001-F1 through F7:
+  * Established single-enterprise boundary rejecting foreign tenant IDs (F1).
+  * Implemented dual-collection catalog model with `/public_products` projection stripping sensitive cost/supplier fields (F2).
+  * Segregated staff credentials into client-inaccessible `/staff_credentials` vault (F3).
+  * Enforced untrusted client input boundaries for e-commerce orders, mandating `Pending` status and preventing client-forged `Completed`/`Paid` states (F4).
+  * Authored and executed a 51-test suite against the local Firebase Firestore Emulator (`tests/emulator-rules.test.ts`) with 100% pass rate (F5).
+  * Adhered to the production deployment constraint by verifying via emulator prior to supervisor review (F6).
+  * Maintained governance risk tracking without prematurely closing partial mitigations (F7).
 
 ---
 

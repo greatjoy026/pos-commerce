@@ -394,6 +394,40 @@ export interface Product {
   ecommerce?: ProductEcommerce | ProductEcommerceConfig;
 }
 
+export interface PublicProductProjection {
+  id: string;
+  name: string;
+  sku: string;
+  price: number;
+  stock: number;
+  category: string;
+  imageUrl?: string;
+  description?: string;
+  brand?: string;
+  model?: string;
+  rating?: number;
+  reviewCount?: number;
+  originalPrice?: number;
+  discountPercent?: number;
+  isNewArrival?: boolean;
+  isBestSeller?: boolean;
+  isFeatured?: boolean;
+  images?: string[];
+  specifications?: Record<string, string>;
+  reviews?: ProductReview[];
+  unit?: string;
+  publishOnline?: boolean;
+  variants?: {
+    sku: string;
+    size?: string;
+    color?: string;
+    stock: number;
+    retailPrice?: number;
+    imageUrl?: string;
+    isActive?: boolean;
+  }[];
+}
+
 export interface Category {
   id: string;
   name: string;

@@ -77,16 +77,25 @@ The following datasets require strict access controls:
 
 ---
 
-## 6. Deployed Firestore Authorization Matrix (SEC-001)
+## 6. Deployed Firestore Authorization Matrix (SEC-001 Hardened)
 
 | Collection | Read (`get` / `list`) | Create | Update | Delete | Immutability / Validation |
 |---|---|---|---|---|---|
-| `/products/{id}` | Public (`true`) | Inventory Staff, Manager, Admin | Inventory Staff, Manager, Admin | Store Manager, Admin | Non-negative price & stock, valid SKU |
-| `/customers/{id}` | Staff (`isSalesStaff`) or Owner (`auth.uid == id`) | Sales Staff or Guest Checkout (`isValidCustomer`) | Sales Staff or Owner (`auth.uid == id`) | Store Manager, Admin | Non-negative loyalty points, PII protected |
-| `/staff/{id}` | Authenticated Staff (`hasAnyStaffRole`) | Store Manager, Admin (`isValidStaff`) | Store Manager, Admin or Self (`avatar`, `phone`) | Super Admin Only | PIN 4-8 chars, protected from unauthenticated access |
-| `/orders/{id}` | Sales Staff or Ordering Customer | Sales Staff or Valid E-Com (`channel == 'ecom'`) | Sales Staff | Super Admin Only | Schema validation: status, channel, non-negative totals |
+| `/products/{id}` | Internal Staff Only (`isStaff()`) | Inventory Staff, Manager, Admin | Inventory Staff, Manager, Admin | Store Manager, Admin | Internal catalog with costs, suppliers, and inventory rules |
+| `/public_products/{id}` | Public (`true`) | Inventory Staff, Manager, Admin | Inventory Staff, Manager, Admin | Store Manager, Admin | **Public Projection**: Cost, supplier, and reorder fields STRICTLY excluded |
+| `/customers/{id}` | Sales Staff (`isSalesStaff`) or Owner (`auth.uid == id`) | Sales Staff or Guest Checkout (`isValidCustomer`) | Sales Staff or Owner (`auth.uid == id`) | Store Manager, Admin | Non-negative loyalty points, PII protected |
+| `/staff/{id}` | Authenticated Staff (`hasAnyStaffRole`) | Store Manager, Admin (`isValidStaff`) | Store Manager, Admin or Self (`avatar`, `phone`) | Super Admin Only | PIN optional on profile; protected from unauthenticated access |
+| `/staff_credentials/{id}` | `false` (Deny all client reads) | Super Admin / Server Only | Super Admin / Server Only | Super Admin / Server Only | **Isolated Credential Vault** — client-side access strictly blocked |
+| `/orders/{id}` | Sales Staff or Ordering Customer | Sales Staff or Valid E-Com (`channel == 'ecom'`) | Sales Staff | Super Admin Only | Browser e-com orders MUST be initialized as `Pending` |
 | `/audit_logs/{id}` | Store Manager, Admin | Authenticated Staff | `false` (Deny) | `false` (Deny) | **STRICTLY IMMUTABLE** append-only ledger |
 | `/settings/{id}` | Public (`true` for store name, currency) | Store Manager, Admin | Store Manager, Admin | `false` (Deny) | Tax rate (0-100), currency formatting |
 | `/shift_reports/{id}` | Sales Staff, Store Manager, Admin | Sales Staff, Store Manager, Admin | Store Manager, Admin | `false` (Deny) | **PERMANENT FINANCIAL RECORD** — no deletion allowed |
 | `/{document=**}` | `false` (Deny) | `false` (Deny) | `false` (Deny) | `false` (Deny) | Global default deny catch-all |
+
+---
+
+## 7. Enterprise Scope & Tenant Isolation
+
+* **Single-Enterprise Domain**: The application currently operates under the unified enterprise domain (`nexus-enterprise`).
+* **Strict Boundary**: Any token presenting a mismatched foreign `tenantId` is rejected from staff operations (`isEnterpriseScope()`). Access is never silently permitted across foreign contexts.
 

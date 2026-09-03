@@ -85,3 +85,19 @@ This register records foundational architectural decisions for `greatjoy026/pos-
   * Public e-commerce is fully functional for storefront visitors.
   * Real automated test suite (`tests/authorization.test.ts`) verifies all access paths and threat payloads.
 
+---
+
+### ADR-008: Dual-Collection Product Projection and Untrusted Client Input Boundaries
+
+* **Status**: `IMPLEMENTED (SEC-001 Hardening)`
+* **Context**: The `products` collection contains sensitive supplier costs, profit margins, reorder thresholds, and batch tracking. Permitting public read access to `/products` would leak wholesale costs to competitors and customers. Furthermore, permitting untrusted browser clients to set order payment or completion status allows price manipulation.
+* **Decision**:
+  1. **Dual-Collection Strategy**: Restrict `/products` to internal authenticated staff (`isStaff()`). Create `/public_products` as a safe public projection managed by `dbService.ts` on write.
+  2. **Strict Projection Schema**: Rules on `/public_products` strictly forbid `cost`, `costPrice`, `reorderPoint`, `supplier`, `serialNumbers`, and `batchNumber`.
+  3. **Untrusted E-Commerce Input Boundary**: Unauthenticated browser clients can only create orders with `status == 'Pending'` and `paymentStatus in ['Pending', 'Unpaid']`. Transitioning an order to `Completed` or `Paid` requires staff authorization or server webhook verification.
+  4. **Credentials Vault Segregation**: Move sensitive authentication secrets to `/staff_credentials/{staffId}` where client reads are completely disabled (`allow read: if false;`).
+* **Consequences**:
+  * Public storefront users browse catalog products securely without access to internal business financials.
+  * Attackers cannot forge "Paid" orders through client-side API manipulation.
+  * Staff PINs and credential material are isolated from general staff profile reads.
+

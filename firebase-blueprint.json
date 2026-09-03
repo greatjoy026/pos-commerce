@@ -2,7 +2,7 @@
   "entities": {
     "product": {
       "title": "Product",
-      "description": "Inventory product item with stock and pricing details",
+      "description": "Internal inventory product item with confidential costs, suppliers, and operational parameters",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
@@ -17,6 +17,25 @@
         "barcode": { "type": "string" },
         "qrCode": { "type": "string" },
         "salesCount": { "type": "number" }
+      },
+      "required": ["id", "name", "sku", "price", "stock", "category"]
+    },
+    "publicProduct": {
+      "title": "PublicProductProjection",
+      "description": "Public-safe storefront product projection omitting confidential supplier and cost data",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "price": { "type": "number" },
+        "stock": { "type": "number" },
+        "category": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "description": { "type": "string" },
+        "rating": { "type": "number" },
+        "reviewCount": { "type": "number" },
+        "publishOnline": { "type": "boolean" }
       },
       "required": ["id", "name", "sku", "price", "stock", "category"]
     },
@@ -36,7 +55,7 @@
     },
     "staff": {
       "title": "StaffMember",
-      "description": "Staff operator user account",
+      "description": "Staff operator user account directory (credentials segregated)",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
@@ -44,10 +63,21 @@
         "email": { "type": "string" },
         "role": { "type": "string" },
         "avatar": { "type": "string" },
-        "pin": { "type": "string" },
         "status": { "type": "string" }
       },
       "required": ["id", "name", "email", "role"]
+    },
+    "staffCredentials": {
+      "title": "StaffCredentialsVault",
+      "description": "Segregated credential store for staff PINs and secrets (no client-side reads)",
+      "type": "object",
+      "properties": {
+        "staffId": { "type": "string" },
+        "hashedPin": { "type": "string" },
+        "salt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["staffId"]
     },
     "order": {
       "title": "Order",
@@ -62,7 +92,8 @@
         "total": { "type": "number" },
         "paymentMethod": { "type": "string" },
         "channel": { "type": "string" },
-        "status": { "type": "string" }
+        "status": { "type": "string" },
+        "customerId": { "type": "string" }
       },
       "required": ["id", "date", "subtotal", "total", "paymentMethod", "channel", "status"]
     },
@@ -116,7 +147,11 @@
   "firestore": {
     "/products/{productId}": {
       "schema": "product",
-      "description": "Store inventory products, prices, stock, and variants"
+      "description": "Internal inventory catalog with wholesale costs, reorder levels, and tracking rules (staff only)"
+    },
+    "/public_products/{productId}": {
+      "schema": "publicProduct",
+      "description": "Public customer storefront catalog projection omitting sensitive internal margins and suppliers"
     },
     "/customers/{customerId}": {
       "schema": "customer",
@@ -124,7 +159,11 @@
     },
     "/staff/{staffId}": {
       "schema": "staff",
-      "description": "Store authenticated staff accounts, roles, and status"
+      "description": "Store authenticated staff accounts, roles, and status (no credentials)"
+    },
+    "/staff_credentials/{staffId}": {
+      "schema": "staffCredentials",
+      "description": "Segregated credential store for staff PINs and secrets (client reads prohibited)"
     },
     "/orders/{orderId}": {
       "schema": "order",

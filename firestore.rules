@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
     
     // ==========================================
-    // Core Helper Functions
+    // Core Helper Functions (Single-Enterprise Identity Boundary)
     // ==========================================
     function isAuthenticated() {
       return request.auth != null;
@@ -21,84 +21,132 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // Role resolution via Firebase Auth custom claims or staff document binding
+    // Single-enterprise isolation: Reject any foreign tenant context
+    function isEnterpriseScope() {
+      return !('tenantId' in request.auth.token) || request.auth.token.tenantId == 'nexus-enterprise';
+    }
+
+    // Role resolution: Custom Claims take precedence; authoritative staff profile is secondary
+    function hasClaimRole(roleName) {
+      return isEnterpriseScope() && (
+        ('role' in request.auth.token && request.auth.token.role == roleName) || 
+        ('roles' in request.auth.token && request.auth.token.roles is list && roleName in request.auth.token.roles)
+      );
+    }
+
     function getStaffRole() {
-      return request.auth.token.role != null
-        ? request.auth.token.role
-        : (exists(/databases/$(database)/documents/staff/$(request.auth.uid))
-            ? get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role
-            : null);
+      return !isEnterpriseScope() ? null :
+        (('role' in request.auth.token && request.auth.token.role != null)
+          ? request.auth.token.role
+          : (exists(/databases/$(database)/documents/staff/$(request.auth.uid))
+              ? get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role
+              : null));
     }
 
     function isStaff() {
-      return isAuthenticated() && (
-        request.auth.token.isStaff == true ||
-        request.auth.token.role != null ||
-        exists(/databases/$(database)/documents/staff/$(request.auth.uid))
+      return isAuthenticated() && isEnterpriseScope() && (
+        ('admin' in request.auth.token && request.auth.token.admin == true) ||
+        ('isSuperAdmin' in request.auth.token && request.auth.token.isSuperAdmin == true) ||
+        ('role' in request.auth.token && request.auth.token.role in [
+          'Super Admin', 'Business Owner', 'Store Manager', 'Admin', 'Manager',
+          'Inventory Manager', 'Warehouse Manager', 'Purchasing Officer',
+          'Cashier', 'Sales Associate', 'Sales Manager', 'Accountant',
+          'E-commerce Manager', 'Warehouse Staff'
+        ]) ||
+        (exists(/databases/$(database)/documents/staff/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role in [
+           'Super Admin', 'Business Owner', 'Store Manager', 'Admin', 'Manager',
+           'Inventory Manager', 'Warehouse Manager', 'Purchasing Officer',
+           'Cashier', 'Sales Associate', 'Sales Manager', 'Accountant',
+           'E-commerce Manager', 'Warehouse Staff'
+         ])
       );
     }
 
     function isSuperAdmin() {
-      return isAuthenticated() && (
-        request.auth.token.admin == true ||
+      return isAuthenticated() && isEnterpriseScope() && (
+        ('admin' in request.auth.token && request.auth.token.admin == true) ||
+        ('isSuperAdmin' in request.auth.token && request.auth.token.isSuperAdmin == true) ||
+        hasClaimRole('Super Admin') ||
         getStaffRole() == 'Super Admin'
       );
     }
 
     function isManagerOrAdmin() {
-      return isAuthenticated() && (
+      return isAuthenticated() && isEnterpriseScope() && (
         isSuperAdmin() ||
+        hasClaimRole('Business Owner') ||
+        hasClaimRole('Store Manager') ||
+        hasClaimRole('Admin') ||
+        hasClaimRole('Manager') ||
         getStaffRole() in ['Business Owner', 'Store Manager', 'Admin', 'Manager']
       );
     }
 
     function isInventoryStaff() {
-      return isAuthenticated() && (
+      return isAuthenticated() && isEnterpriseScope() && (
         isManagerOrAdmin() ||
+        hasClaimRole('Inventory Manager') ||
+        hasClaimRole('Warehouse Manager') ||
+        hasClaimRole('Purchasing Officer') ||
         getStaffRole() in ['Inventory Manager', 'Warehouse Manager', 'Purchasing Officer']
       );
     }
 
     function isSalesStaff() {
-      return isAuthenticated() && (
+      return isAuthenticated() && isEnterpriseScope() && (
         isManagerOrAdmin() ||
+        hasClaimRole('Cashier') ||
+        hasClaimRole('Sales Associate') ||
+        hasClaimRole('Sales Manager') ||
         getStaffRole() in ['Cashier', 'Sales Associate', 'Sales Manager']
       );
     }
 
     function hasAnyStaffRole() {
-      return isStaff() && (
-        isManagerOrAdmin() ||
-        isInventoryStaff() ||
-        isSalesStaff() ||
-        getStaffRole() in ['Accountant', 'E-commerce Manager', 'Warehouse Staff']
-      );
+      return isStaff();
     }
 
-    // Optional multi-tenant isolation helper (preserves backward compatibility when tenantId not present)
-    function matchesTenant(data) {
-      return !('tenantId' in data) || request.auth.token.tenantId == null || data.tenantId == request.auth.token.tenantId;
+    function hasPermission(perm) {
+      return isSuperAdmin() ||
+        (isAuthenticated() && isEnterpriseScope() && 'permissions' in request.auth.token && request.auth.token.permissions is list && perm in request.auth.token.permissions);
     }
 
     // ==========================================
     // Entity Schema Validation Functions
     // ==========================================
+    // Internal Product Schema (Contains cost, supplier info, inventory rules)
     function isValidProduct(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
              data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
              data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
              data.price is number && data.price >= 0 &&
              data.stock is number && data.stock >= 0 &&
+             data.category is string && data.category.size() <= 100;
+    }
+
+    // Public Product Projection Schema (Safe for public storefront; STRICTLY excludes sensitive cost/supplier fields)
+    function isValidPublicProduct(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+             data.price is number && data.price >= 0 &&
+             data.stock is number && data.stock >= 0 &&
              data.category is string && data.category.size() <= 100 &&
-             matchesTenant(data);
+             // Sensitive fields MUST NOT exist in public projection
+             !('cost' in data) &&
+             !('costPrice' in data) &&
+             !('reorderPoint' in data) &&
+             !('serialNumbers' in data) &&
+             !('supplier' in data) &&
+             !('batchNumber' in data);
     }
 
     function isValidCustomer(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
              data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
              data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
-             (!('loyaltyPoints' in data) || (data.loyaltyPoints is number && data.loyaltyPoints >= 0)) &&
-             matchesTenant(data);
+             (!('loyaltyPoints' in data) || (data.loyaltyPoints is number && data.loyaltyPoints >= 0));
     }
 
     function isValidStaff(data) {
@@ -107,8 +155,8 @@ service cloud.firestore {
              data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
              data.role is string &&
              data.status is string && data.status in ['Active', 'Inactive', 'On Leave'] &&
-             data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 8 &&
-             matchesTenant(data);
+             // PIN is optional on staff document to support credential segregation
+             (!('pin' in data) || (data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 8));
     }
 
     function isValidOrder(data) {
@@ -117,15 +165,19 @@ service cloud.firestore {
              data.subtotal is number && data.subtotal >= 0 &&
              data.total is number && data.total >= 0 &&
              data.channel is string && data.channel in ['pos', 'ecom', 'mobile', 'phone'] &&
-             data.status is string && data.status in ['Completed', 'Pending', 'Processing', 'Cancelled', 'Refunded'] &&
-             matchesTenant(data);
+             data.status is string && data.status in ['Completed', 'Pending', 'Processing', 'Cancelled', 'Refunded'];
     }
 
+    // Untrusted Client Input Boundary for Public E-commerce Orders
     function isValidEcomOrder(data) {
       return data.channel == 'ecom' &&
-             data.status in ['Completed', 'Pending'] &&
+             // Browser-created e-commerce orders MUST be initialized as Pending. Client cannot set Completed or Paid!
+             data.status == 'Pending' &&
+             (!('paymentStatus' in data) || data.paymentStatus in ['Pending', 'Unpaid']) &&
              data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 150 &&
-             data.customerEmail is string && data.customerEmail.size() > 0 && data.customerEmail.size() <= 150;
+             data.customerEmail is string && data.customerEmail.size() > 0 && data.customerEmail.size() <= 150 &&
+             data.items is list && data.items.size() > 0 && data.items.size() <= 100 &&
+             data.total is number && data.total >= 0;
     }
 
     function isValidAuditLog(data) {
@@ -134,8 +186,7 @@ service cloud.firestore {
              data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 150 &&
              data.action is string && data.action.size() > 0 && data.action.size() <= 100 &&
              data.module is string && data.module.size() > 0 && data.module.size() <= 50 &&
-             data.details is string && data.details.size() <= 2000 &&
-             matchesTenant(data);
+             data.details is string && data.details.size() <= 2000;
     }
 
     function isValidSettings(data) {
@@ -149,8 +200,7 @@ service cloud.firestore {
              data.terminalId is string && data.terminalId.size() > 0 && data.terminalId.size() <= 100 &&
              data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 150 &&
              data.shiftStartTime is string && data.shiftStartTime.size() > 0 &&
-             data.totalSales is number && data.totalSales >= 0 &&
-             matchesTenant(data);
+             data.totalSales is number && data.totalSales >= 0;
     }
 
     // ==========================================
@@ -161,24 +211,36 @@ service cloud.firestore {
     }
 
     // ==========================================
-    // 2. Products Collection
+    // 2. Products Collection (Internal - Sensitive)
     // ==========================================
-    // Public read for storefront; authenticated write for inventory/manager staff
+    // Staff-only access: Contains cost price, supplier information, and inventory rules.
+    // Public unauthenticated users are strictly blocked.
     match /products/{productId} {
-      allow read: if true;
+      allow read: if isStaff();
       allow create: if isValidId(productId) && isInventoryStaff() && isValidProduct(incoming());
       allow update: if isValidId(productId) && isInventoryStaff() && isValidProduct(incoming());
       allow delete: if isValidId(productId) && isManagerOrAdmin();
     }
 
     // ==========================================
-    // 3. Customers Collection
+    // 3. Public Products Projection Collection (Storefront Safe)
     // ==========================================
-    // Protected CRM: staff can view CRM directory, customers can read/update own record
+    // Public read for customer storefront; cost prices, suppliers, and internal fields omitted.
+    match /public_products/{productId} {
+      allow read: if true;
+      allow create: if isValidId(productId) && isInventoryStaff() && isValidPublicProduct(incoming());
+      allow update: if isValidId(productId) && isInventoryStaff() && isValidPublicProduct(incoming());
+      allow delete: if isValidId(productId) && isManagerOrAdmin();
+    }
+
+    // ==========================================
+    // 4. Customers Collection (CRM Directory)
+    // ==========================================
+    // Protected CRM: Sales staff can query directory; customers can read/update own record only.
     match /customers/{customerId} {
       allow get: if isValidId(customerId) && (
         isSalesStaff() || 
-        (isAuthenticated() && (request.auth.uid == customerId || (resource.data != null && resource.data.email == request.auth.token.email)))
+        (isAuthenticated() && (request.auth.uid == customerId || (resource.data != null && 'email' in resource.data && 'email' in request.auth.token && resource.data.email == request.auth.token.email)))
       );
       allow list: if isSalesStaff();
       allow create: if isValidId(customerId) && isValidCustomer(incoming()) && (
@@ -195,9 +257,9 @@ service cloud.firestore {
     }
 
     // ==========================================
-    // 4. Staff Collection
+    // 5. Staff Collection & Credentials Vault
     // ==========================================
-    // Strictly authenticated staff access; prevents public credential/PIN leakage
+    // Strictly authenticated staff directory access.
     match /staff/{staffId} {
       allow get, list: if isAuthenticated() && hasAnyStaffRole();
       allow create: if isValidId(staffId) && isManagerOrAdmin() && isValidStaff(incoming());
@@ -208,38 +270,49 @@ service cloud.firestore {
       allow delete: if isValidId(staffId) && isSuperAdmin();
     }
 
+    // Protected Credentials Vault: Isolated credential records, NEVER readable by clients.
+    match /staff_credentials/{staffId} {
+      allow read, list: if false; // Deny all client-side reads
+      allow write: if isSuperAdmin(); // Writeable only by super admin / trusted server
+    }
+
     // ==========================================
-    // 5. Orders Collection
+    // 6. Orders Collection
     // ==========================================
-    // Public e-commerce order creation with strict validation; POS sales staff creation; protected reads
+    // Sales staff can list all orders.
+    // Customers can ONLY list their own orders (enforces customerId scoping) and retrieve own order.
+    // Public visitors can only create valid untrusted e-commerce orders (Pending status).
     match /orders/{orderId} {
       allow get: if isValidId(orderId) && (
         isSalesStaff() || 
-        (isAuthenticated() && (resource.data.customerId == request.auth.uid || resource.data.customerEmail == request.auth.token.email))
+        (isAuthenticated() && resource.data.customerId == request.auth.uid)
       );
-      allow list: if isSalesStaff() || (isAuthenticated() && request.auth.uid != null);
+      allow list: if isSalesStaff() || (
+        isAuthenticated() && 
+        resource.data.customerId == request.auth.uid
+      );
       allow create: if isValidId(orderId) && isValidOrder(incoming()) && (
-        isSalesStaff() || 
-        isValidEcomOrder(incoming())
+        (incoming().channel == 'pos' && isSalesStaff()) || 
+        (incoming().channel == 'ecom' && isValidEcomOrder(incoming()))
       );
       allow update: if isValidId(orderId) && isSalesStaff() && isValidOrder(incoming());
       allow delete: if isValidId(orderId) && isSuperAdmin();
     }
 
     // ==========================================
-    // 6. Audit Logs Collection
+    // 7. Audit Logs Collection
     // ==========================================
-    // Append-only immutable ledger; read restricted to manager/auditors
+    // Strictly append-only immutable ledger; read restricted to manager/auditors.
     match /audit_logs/{logId} {
       allow get, list: if isManagerOrAdmin();
-      allow create: if isValidId(logId) && isAuthenticated() && isValidAuditLog(incoming());
+      allow create: if isValidId(logId) && isAuthenticated() && isStaff() && isValidAuditLog(incoming());
       allow update, delete: if false;
     }
 
     // ==========================================
-    // 7. System Settings Collection
+    // 8. System Settings Collection
     // ==========================================
-    // Public read for store name, active currency & tax configuration; admin-only modification
+    // Public read for store name, active currency & tax configuration; manager modification only.
     match /settings/{settingId} {
       allow read: if true;
       allow create, update: if isValidId(settingId) && isManagerOrAdmin() && isValidSettings(incoming());
@@ -247,9 +320,9 @@ service cloud.firestore {
     }
 
     // ==========================================
-    // 8. Shift Reports Collection
+    // 9. Shift Reports Collection
     // ==========================================
-    // Cashier float reconciliation & Z-reports; permanent financial record
+    // Cashier float reconciliation & Z-reports; permanent financial records (no deletion).
     match /shift_reports/{shiftId} {
       allow get, list: if isSalesStaff() || isManagerOrAdmin();
       allow create: if isValidId(shiftId) && (isSalesStaff() || isManagerOrAdmin()) && isValidShiftReport(incoming());
@@ -258,7 +331,7 @@ service cloud.firestore {
     }
 
     // ==========================================
-    // 9. Diagnostic Test Connection Document
+    // 10. Diagnostic Test Connection Document
     // ==========================================
     match /test/{testId} {
       allow read: if isValidId(testId);
