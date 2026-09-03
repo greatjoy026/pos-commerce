@@ -65,3 +65,23 @@ This register records foundational architectural decisions for `greatjoy026/pos-
 * **Decision**: Inventory quantities must always be accounted for in an **authoritative base unit**. All selling tiers and packaging units (dozen, carton, pack) must apply deterministic multiplier conversions at point of sale and receiving.
 * **Current State**: Multipliers are calculated in `App.tsx` using `orderItem.unitMultiplier` or `packagingUnits` lookups with `dual_stock` / `auto_depackage` logic.
 * **Target State**: Formalized in a dedicated `UOMConversionService` supporting custom purchase packaging and retail selling units.
+
+---
+
+### ADR-007: Server-Enforced Firestore Authorization and Security Hardening
+
+* **Status**: `IMPLEMENTED (SEC-001)`
+* **Context**: The application previously had open Firestore rules relying exclusively on document ID length (`isValidId(id)`). This left all customer PII, staff PINs, pricing, catalog records, and financial transaction histories vulnerable to unauthenticated manipulation or theft.
+* **Decision**: 
+  1. Enforce strict Default Deny at the global boundary (`match /{document=**} { allow read, write: if false; }`).
+  2. Implement an authenticated Role-Based Access Control (RBAC) model supporting Super Admin, Store Manager, Inventory Manager, and Cashier roles.
+  3. Keep catalog browsing and store settings publicly readable so public e-commerce operates without friction.
+  4. Permit unauthenticated e-commerce order creation with strict channel and customer schema constraints (`channel == 'ecom'`, non-negative totals).
+  5. Enforce append-only immutability for audit logs (`/audit_logs/{id}`) and financial shift reports (`/shift_reports/{id}`).
+  6. Restrict `/staff` collection to authenticated staff users, mitigating plain-text PIN exposure to the public internet.
+* **Consequences**:
+  * Unauthenticated attackers cannot query CRM customer records or read employee PINs.
+  * Insecure client-side seeding cannot overwrite production data without admin credentials.
+  * Public e-commerce is fully functional for storefront visitors.
+  * Real automated test suite (`tests/authorization.test.ts`) verifies all access paths and threat payloads.
+

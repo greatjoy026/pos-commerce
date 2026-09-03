@@ -2,64 +2,267 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Global helper functions
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128;
+    // ==========================================
+    // Core Helper Functions
+    // ==========================================
+    function isAuthenticated() {
+      return request.auth != null;
     }
-    
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
-    
+
     function existing() {
       return resource.data;
     }
 
-    // Default deny catch-all
+    // Role resolution via Firebase Auth custom claims or staff document binding
+    function getStaffRole() {
+      return request.auth.token.role != null
+        ? request.auth.token.role
+        : (exists(/databases/$(database)/documents/staff/$(request.auth.uid))
+            ? get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role
+            : null);
+    }
+
+    function isStaff() {
+      return isAuthenticated() && (
+        request.auth.token.isStaff == true ||
+        request.auth.token.role != null ||
+        exists(/databases/$(database)/documents/staff/$(request.auth.uid))
+      );
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.admin == true ||
+        getStaffRole() == 'Super Admin'
+      );
+    }
+
+    function isManagerOrAdmin() {
+      return isAuthenticated() && (
+        isSuperAdmin() ||
+        getStaffRole() in ['Business Owner', 'Store Manager', 'Admin', 'Manager']
+      );
+    }
+
+    function isInventoryStaff() {
+      return isAuthenticated() && (
+        isManagerOrAdmin() ||
+        getStaffRole() in ['Inventory Manager', 'Warehouse Manager', 'Purchasing Officer']
+      );
+    }
+
+    function isSalesStaff() {
+      return isAuthenticated() && (
+        isManagerOrAdmin() ||
+        getStaffRole() in ['Cashier', 'Sales Associate', 'Sales Manager']
+      );
+    }
+
+    function hasAnyStaffRole() {
+      return isStaff() && (
+        isManagerOrAdmin() ||
+        isInventoryStaff() ||
+        isSalesStaff() ||
+        getStaffRole() in ['Accountant', 'E-commerce Manager', 'Warehouse Staff']
+      );
+    }
+
+    // Optional multi-tenant isolation helper (preserves backward compatibility when tenantId not present)
+    function matchesTenant(data) {
+      return !('tenantId' in data) || request.auth.token.tenantId == null || data.tenantId == request.auth.token.tenantId;
+    }
+
+    // ==========================================
+    // Entity Schema Validation Functions
+    // ==========================================
+    function isValidProduct(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+             data.price is number && data.price >= 0 &&
+             data.stock is number && data.stock >= 0 &&
+             data.category is string && data.category.size() <= 100 &&
+             matchesTenant(data);
+    }
+
+    function isValidCustomer(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
+             data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
+             (!('loyaltyPoints' in data) || (data.loyaltyPoints is number && data.loyaltyPoints >= 0)) &&
+             matchesTenant(data);
+    }
+
+    function isValidStaff(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
+             data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
+             data.role is string &&
+             data.status is string && data.status in ['Active', 'Inactive', 'On Leave'] &&
+             data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 8 &&
+             matchesTenant(data);
+    }
+
+    function isValidOrder(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.date is string && data.date.size() > 0 &&
+             data.subtotal is number && data.subtotal >= 0 &&
+             data.total is number && data.total >= 0 &&
+             data.channel is string && data.channel in ['pos', 'ecom', 'mobile', 'phone'] &&
+             data.status is string && data.status in ['Completed', 'Pending', 'Processing', 'Cancelled', 'Refunded'] &&
+             matchesTenant(data);
+    }
+
+    function isValidEcomOrder(data) {
+      return data.channel == 'ecom' &&
+             data.status in ['Completed', 'Pending'] &&
+             data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 150 &&
+             data.customerEmail is string && data.customerEmail.size() > 0 && data.customerEmail.size() <= 150;
+    }
+
+    function isValidAuditLog(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.timestamp is string && data.timestamp.size() > 0 &&
+             data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 150 &&
+             data.action is string && data.action.size() > 0 && data.action.size() <= 100 &&
+             data.module is string && data.module.size() > 0 && data.module.size() <= 50 &&
+             data.details is string && data.details.size() <= 2000 &&
+             matchesTenant(data);
+    }
+
+    function isValidSettings(data) {
+      return data.currency is string && data.currency.size() <= 10 &&
+             data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 200 &&
+             data.taxRate is number && data.taxRate >= 0 && data.taxRate <= 100;
+    }
+
+    function isValidShiftReport(data) {
+      return data.reportId is string && data.reportId.size() > 0 && data.reportId.size() <= 128 &&
+             data.terminalId is string && data.terminalId.size() > 0 && data.terminalId.size() <= 100 &&
+             data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 150 &&
+             data.shiftStartTime is string && data.shiftStartTime.size() > 0 &&
+             data.totalSales is number && data.totalSales >= 0 &&
+             matchesTenant(data);
+    }
+
+    // ==========================================
+    // 1. Default Deny Global Boundary
+    // ==========================================
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Products collection: accessible for reading and writing by active POS/ecommerce sessions
+    // ==========================================
+    // 2. Products Collection
+    // ==========================================
+    // Public read for storefront; authenticated write for inventory/manager staff
     match /products/{productId} {
       allow read: if true;
-      allow write: if isValidId(productId);
+      allow create: if isValidId(productId) && isInventoryStaff() && isValidProduct(incoming());
+      allow update: if isValidId(productId) && isInventoryStaff() && isValidProduct(incoming());
+      allow delete: if isValidId(productId) && isManagerOrAdmin();
     }
 
-    // Customers collection
+    // ==========================================
+    // 3. Customers Collection
+    // ==========================================
+    // Protected CRM: staff can view CRM directory, customers can read/update own record
     match /customers/{customerId} {
-      allow read: if true;
-      allow write: if isValidId(customerId);
+      allow get: if isValidId(customerId) && (
+        isSalesStaff() || 
+        (isAuthenticated() && (request.auth.uid == customerId || (resource.data != null && resource.data.email == request.auth.token.email)))
+      );
+      allow list: if isSalesStaff();
+      allow create: if isValidId(customerId) && isValidCustomer(incoming()) && (
+        isSalesStaff() || 
+        (isAuthenticated() && request.auth.uid == customerId) || 
+        incoming().channel == 'ecom_guest' ||
+        !isAuthenticated()
+      );
+      allow update: if isValidId(customerId) && isValidCustomer(incoming()) && (
+        isSalesStaff() || 
+        (isAuthenticated() && request.auth.uid == customerId)
+      );
+      allow delete: if isValidId(customerId) && isManagerOrAdmin();
     }
 
-    // Staff collection
+    // ==========================================
+    // 4. Staff Collection
+    // ==========================================
+    // Strictly authenticated staff access; prevents public credential/PIN leakage
     match /staff/{staffId} {
-      allow read: if true;
-      allow write: if isValidId(staffId);
+      allow get, list: if isAuthenticated() && hasAnyStaffRole();
+      allow create: if isValidId(staffId) && isManagerOrAdmin() && isValidStaff(incoming());
+      allow update: if isValidId(staffId) && isValidStaff(incoming()) && (
+        isManagerOrAdmin() || 
+        (request.auth.uid == staffId && incoming().diff(existing()).affectedKeys().hasOnly(['avatar', 'phone', 'lastActive']))
+      );
+      allow delete: if isValidId(staffId) && isSuperAdmin();
     }
 
-    // Orders collection
+    // ==========================================
+    // 5. Orders Collection
+    // ==========================================
+    // Public e-commerce order creation with strict validation; POS sales staff creation; protected reads
     match /orders/{orderId} {
-      allow read: if true;
-      allow write: if isValidId(orderId);
+      allow get: if isValidId(orderId) && (
+        isSalesStaff() || 
+        (isAuthenticated() && (resource.data.customerId == request.auth.uid || resource.data.customerEmail == request.auth.token.email))
+      );
+      allow list: if isSalesStaff() || (isAuthenticated() && request.auth.uid != null);
+      allow create: if isValidId(orderId) && isValidOrder(incoming()) && (
+        isSalesStaff() || 
+        isValidEcomOrder(incoming())
+      );
+      allow update: if isValidId(orderId) && isSalesStaff() && isValidOrder(incoming());
+      allow delete: if isValidId(orderId) && isSuperAdmin();
     }
 
-    // Audit logs collection (immutable logs)
+    // ==========================================
+    // 6. Audit Logs Collection
+    // ==========================================
+    // Append-only immutable ledger; read restricted to manager/auditors
     match /audit_logs/{logId} {
-      allow read: if true;
-      allow create: if isValidId(logId);
+      allow get, list: if isManagerOrAdmin();
+      allow create: if isValidId(logId) && isAuthenticated() && isValidAuditLog(incoming());
       allow update, delete: if false;
     }
 
-    // Settings collection
+    // ==========================================
+    // 7. System Settings Collection
+    // ==========================================
+    // Public read for store name, active currency & tax configuration; admin-only modification
     match /settings/{settingId} {
       allow read: if true;
-      allow write: if isValidId(settingId);
+      allow create, update: if isValidId(settingId) && isManagerOrAdmin() && isValidSettings(incoming());
+      allow delete: if false;
     }
 
-    // Test connection doc
+    // ==========================================
+    // 8. Shift Reports Collection
+    // ==========================================
+    // Cashier float reconciliation & Z-reports; permanent financial record
+    match /shift_reports/{shiftId} {
+      allow get, list: if isSalesStaff() || isManagerOrAdmin();
+      allow create: if isValidId(shiftId) && (isSalesStaff() || isManagerOrAdmin()) && isValidShiftReport(incoming());
+      allow update: if isValidId(shiftId) && isManagerOrAdmin() && isValidShiftReport(incoming());
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // 9. Diagnostic Test Connection Document
+    // ==========================================
     match /test/{testId} {
-      allow read, write: if true;
+      allow read: if isValidId(testId);
+      allow write: if false;
     }
   }
 }

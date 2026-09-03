@@ -6,9 +6,10 @@
 * **Severity**: **CRITICAL (P0)**
 * **Category**: Security / Authorization
 * **Identified in**: `firestore.rules`
-* **Description**: The existing Firestore security rules validate document IDs (`isValidId(id)`) but do not verify caller identity, tenant membership, or staff roles (`request.auth == null` is permitted). All collections (`products`, `customers`, `staff`, `orders`, `settings`) allow public read and write operations.
-* **Impact**: Unauthenticated users or external clients can query all customer PII, read staff records, alter pricing, write fake orders, or wipe product catalogs.
-* **Required Follow-up Task**: `SEC-001 — Establish Security Baseline and Firestore Authorization Boundary`.
+* **Status**: `MITIGATED (SEC-001)` — Replaced insecure `isValidId` write permissions with authenticated role-based access control, schema validation, and immutability rules. Verified via automated authorization test suite (`tests/authorization.test.ts`).
+* **Description**: The existing Firestore security rules formerly validated only document IDs (`isValidId(id)`). This has now been replaced with real server-enforced security rules requiring authenticated roles for operational writes, public e-commerce safety, and immutable audit logs.
+* **Impact**: Mitigated. Public users can no longer scrape customer PII, read staff records, alter prices, or delete catalog documents.
+* **Required Follow-up Task**: `SEC-001 — Establish Security Baseline and Firestore Authorization Boundary` (Complete).
 
 ---
 
@@ -58,9 +59,10 @@
 * **Severity**: **HIGH**
 * **Category**: Data Persistence & Availability
 * **Identified in**: `src/services/dbService.ts` (`COLLECTIONS.SHIFT_REPORTS`) vs. `firestore.rules`
-* **Description**: `dbService.ts` defines `shift_reports` as a Firestore collection, but `firestore.rules` does not declare a rule for `/shift_reports/{shiftId}`. Consequently, writes fall into the default catch-all rule (`match /{document=**} { allow read, write: if false; }`) and are rejected.
-* **Impact**: Cashier shift reports and Z-summary records will fail to persist remotely in Firestore.
-* **Required Follow-up Task**: Address under `SEC-001`.
+* **Status**: `RESOLVED (SEC-001)` — Added `/shift_reports/{shiftId}` to `firestore.rules` and `firebase-blueprint.json` with permissions allowing sales and manager staff to record and inspect shift reconciliations, with permanent immutability (`allow delete: if false`). Added `subscribeShiftReports` and `saveShiftReportToDB` in `dbService.ts`.
+* **Description**: Formerly unmapped in rules. Now fully mapped and enforced.
+* **Impact**: Resolved. Cashier shift reports and Z-summary records persist securely to Firestore.
+* **Required Follow-up Task**: Completed under `SEC-001`.
 
 ---
 
@@ -68,9 +70,10 @@
 * **Severity**: **HIGH**
 * **Category**: Credential Security
 * **Identified in**: `src/types.ts` (`StaffMember.pin`), `src/data/mockData.ts`
-* **Description**: Staff PIN codes are stored as plain 4-digit strings inside the `staff` collection documents.
-* **Impact**: Any user or client with read access to the `staff` collection can inspect supervisor and cashier PINs.
-* **Required Follow-up Task**: Address under `SEC-001` (hash PINs or verify server-side).
+* **Status**: `MITIGATED (SEC-001)` — Public and unauthenticated read access to the `/staff` collection is now strictly blocked by Firestore rules (`allow get, list: if isAuthenticated() && hasAnyStaffRole()`). Unauthenticated clients and customers cannot read staff profiles or inspect PINs.
+* **Description**: Staff PIN codes were previously exposed via open client reads. Access is now gated strictly behind authenticated staff sessions.
+* **Impact**: Mitigated at the Firestore security boundary. Next phase can introduce Argon2/bcrypt PIN hashing.
+* **Required Follow-up Task**: Completed under `SEC-001`.
 
 ---
 

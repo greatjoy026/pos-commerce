@@ -93,6 +93,24 @@
         "lowStockThreshold": { "type": "number" }
       },
       "required": ["currency", "businessName", "taxRate"]
+    },
+    "shiftReport": {
+      "title": "ShiftReport",
+      "description": "POS register shift reconciliation, drawer float, and Z-reading ledger record",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string" },
+        "terminalId": { "type": "string" },
+        "staffName": { "type": "string" },
+        "shiftStartTime": { "type": "string" },
+        "totalSales": { "type": "number" },
+        "grossSales": { "type": "number" },
+        "openingFloat": { "type": "number" },
+        "actualDrawerCash": { "type": "number" },
+        "variance": { "type": "number" },
+        "notes": { "type": "string" }
+      },
+      "required": ["reportId", "terminalId", "staffName", "shiftStartTime", "totalSales"]
     }
   },
   "firestore": {
@@ -119,6 +137,10 @@
     "/settings/{settingId}": {
       "schema": "settings",
       "description": "Global enterprise POS system and currency configuration"
+    },
+    "/shift_reports/{shiftId}": {
+      "schema": "shiftReport",
+      "description": "Store POS cash drawer float reconciliation and shift closeout ledger records"
     }
   }
 }

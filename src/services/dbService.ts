@@ -13,7 +13,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { Product, Customer, StaffMember, Order, AuditLog, SystemSettings } from '../types';
+import { Product, Customer, StaffMember, Order, AuditLog, SystemSettings, ShiftReportData } from '../types';
 import { 
   INITIAL_PRODUCTS, 
   INITIAL_CUSTOMERS, 
@@ -547,5 +547,36 @@ export async function saveSettingsToDB(settings: Partial<SystemSettings>): Promi
     }, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${COLLECTIONS.SETTINGS}/general`);
+  }
+}
+
+/**
+ * Shift Reports Database Operations
+ */
+export function subscribeShiftReports(onUpdate: (reports: ShiftReportData[]) => void, onError?: (err: any) => void) {
+  const colRef = collection(db, COLLECTIONS.SHIFT_REPORTS);
+  return onSnapshot(colRef, (snapshot) => {
+    if (!snapshot.empty) {
+      const reportsList: ShiftReportData[] = [];
+      snapshot.forEach(docSnap => {
+        reportsList.push(docSnap.data() as ShiftReportData);
+      });
+      reportsList.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      onUpdate(reportsList);
+    } else {
+      onUpdate([]);
+    }
+  }, (err) => {
+    handleFirestoreError(err, OperationType.LIST, COLLECTIONS.SHIFT_REPORTS);
+    if (onError) onError(err);
+  });
+}
+
+export async function saveShiftReportToDB(report: ShiftReportData): Promise<void> {
+  try {
+    const docRef = doc(db, COLLECTIONS.SHIFT_REPORTS, report.reportId);
+    await setDoc(docRef, report);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${COLLECTIONS.SHIFT_REPORTS}/${report.reportId}`);
   }
 }

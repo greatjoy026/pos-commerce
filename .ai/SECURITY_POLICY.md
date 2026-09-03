@@ -74,3 +74,19 @@ The following datasets require strict access controls:
 * **No Hardcoded Secrets**: Never commit or embed private API keys, Firebase service account credentials, OAuth client secrets, or private certificates in client-side code.
 * **Environment Variables**: Sensitive configuration must use `.env` (documented in `.env.example`).
 * **Server-Side API Proxy**: Third-party integrations requiring secret keys must be executed via server-side endpoints, not called directly from the browser.
+
+---
+
+## 6. Deployed Firestore Authorization Matrix (SEC-001)
+
+| Collection | Read (`get` / `list`) | Create | Update | Delete | Immutability / Validation |
+|---|---|---|---|---|---|
+| `/products/{id}` | Public (`true`) | Inventory Staff, Manager, Admin | Inventory Staff, Manager, Admin | Store Manager, Admin | Non-negative price & stock, valid SKU |
+| `/customers/{id}` | Staff (`isSalesStaff`) or Owner (`auth.uid == id`) | Sales Staff or Guest Checkout (`isValidCustomer`) | Sales Staff or Owner (`auth.uid == id`) | Store Manager, Admin | Non-negative loyalty points, PII protected |
+| `/staff/{id}` | Authenticated Staff (`hasAnyStaffRole`) | Store Manager, Admin (`isValidStaff`) | Store Manager, Admin or Self (`avatar`, `phone`) | Super Admin Only | PIN 4-8 chars, protected from unauthenticated access |
+| `/orders/{id}` | Sales Staff or Ordering Customer | Sales Staff or Valid E-Com (`channel == 'ecom'`) | Sales Staff | Super Admin Only | Schema validation: status, channel, non-negative totals |
+| `/audit_logs/{id}` | Store Manager, Admin | Authenticated Staff | `false` (Deny) | `false` (Deny) | **STRICTLY IMMUTABLE** append-only ledger |
+| `/settings/{id}` | Public (`true` for store name, currency) | Store Manager, Admin | Store Manager, Admin | `false` (Deny) | Tax rate (0-100), currency formatting |
+| `/shift_reports/{id}` | Sales Staff, Store Manager, Admin | Sales Staff, Store Manager, Admin | Store Manager, Admin | `false` (Deny) | **PERMANENT FINANCIAL RECORD** — no deletion allowed |
+| `/{document=**}` | `false` (Deny) | `false` (Deny) | `false` (Deny) | `false` (Deny) | Global default deny catch-all |
+

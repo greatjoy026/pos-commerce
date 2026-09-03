@@ -17,6 +17,7 @@ import POSReceiptModal from './POSReceiptModal';
 import POSUnitPickerModal from './POSUnitPickerModal';
 import OpticalLaserScannerModal from './OpticalLaserScannerModal';
 import { playPosSound, dispatchReceiptEmail } from '../utils/receiptUtils';
+import { saveShiftReportToDB } from '../services/dbService';
 
 interface POSModuleProps {
   products: Product[];
@@ -720,6 +721,7 @@ export default function POSModule({
   };
 
   const handleFinalizeShift = (report: ShiftReportData) => {
+    saveShiftReportToDB(report).catch(() => {});
     setShiftFinalizedNotice(`Shift report ${report.reportId} finalized. Total Sales: ${formatAmount(report.totalSales)}, Cash Variance: ${formatAmount(report.variance)}.`);
     setTimeout(() => setShiftFinalizedNotice(null), 8000);
   };

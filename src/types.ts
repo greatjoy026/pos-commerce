@@ -549,6 +549,58 @@ export interface AuditLog {
   details: string;
 }
 
+export interface ShiftTransaction {
+  id: string;
+  time: string;
+  total: number;
+  paymentMethod: PaymentMethod;
+  itemsCount: number;
+  customerName?: string;
+  cashTendered?: number;
+  cashChange?: number;
+  tax?: number;
+  discount?: number;
+}
+
+export interface CashMovement {
+  id: string;
+  time: string;
+  type: 'cash_in' | 'cash_out' | 'safe_drop';
+  amount: number;
+  category: string;
+  reason: string;
+  staffName: string;
+}
+
+export interface ShiftReportData {
+  reportId: string;
+  reportType: 'X_READING' | 'Z_READING';
+  timestamp: string;
+  shiftStartTime: string;
+  staffName: string;
+  terminalId: string;
+  openingFloat: number;
+  totalSales: number;
+  grossSales: number;
+  totalTax: number;
+  totalDiscounts: number;
+  totalTransactions: number;
+  cashSales: number;
+  cardSales: number;
+  digitalWalletSales: number;
+  otherSales: number;
+  cashInTotal: number;
+  cashOutTotal: number;
+  safeDropsTotal: number;
+  expectedDrawerCash: number;
+  actualDrawerCash: number;
+  variance: number;
+  varianceReason?: string;
+  supervisorSignature?: string;
+  notes: string;
+  cashMovements: CashMovement[];
+}
+
 export interface StaffMember {
   id: string;
   name: string;

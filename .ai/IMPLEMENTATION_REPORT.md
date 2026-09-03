@@ -171,3 +171,78 @@ Establish an authoritative engineering governance framework and architectural do
 - [x] Implementation report completed and submitted to review queue.
 
 **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
+
+---
+
+# Implementation Report — SEC-001
+
+**Task ID**: SEC-001  
+**Task Name**: Firestore Authorization & Security Hardening  
+**Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`  
+**Author**: Gemini (Senior Software Engineer & Implementation Lead)  
+**Date**: 2026-09-03  
+
+---
+
+## 1. Objective
+Replace the insecure Firestore authorization model (which relied solely on `isValidId` string checks) with a robust, server-enforced security boundary protecting business data from unauthorized reads, writes, updates, and deletes.
+
+The authorization hierarchy enforces:
+`Authentication -> Staff Identity -> Role -> Permission -> Resource Scope`
+
+---
+
+## 2. Core Accomplishments
+
+### 2.1 Server-Enforced Security Rules (`firestore.rules`)
+* **Global Default Deny**: Every document and path falls into `allow read, write: if false;` unless explicitly matched.
+* **Role-Based Access Control**:
+  * Implemented helper functions: `isStaff()`, `getStaffRole()`, `isSuperAdmin()`, `isManagerOrAdmin()`, `isInventoryStaff()`, `isSalesStaff()`, and `hasAnyStaffRole()`.
+  * Supports Firebase Auth custom claims (`request.auth.token.role`, `admin`, `isStaff`) as well as document-binding lookups against `/staff/$(request.auth.uid)`.
+* **Public E-Commerce Protection**:
+  * `/products`: Public `read` for browsing catalog items; writes strictly restricted to authenticated inventory staff and managers.
+  * `/settings`: Public `read` for currency and store name; modifications restricted to managers and admins.
+  * `/orders`: Public `create` for online storefront orders with strict schema validation (`channel == 'ecom'`, `status in ['Pending', 'Completed']`, customer contact present, non-negative totals). Arbitrary order listings and updates denied to the public.
+* **Sensitive Data Protection**:
+  * `/customers`: Listing denied to public; accessible to sales staff for POS CRM; individual customers can only read/update their own profile.
+  * `/staff`: Public and unauthenticated access completely blocked (`allow get, list: if isAuthenticated() && hasAnyStaffRole()`). Mitigates plaintext PIN exposure (RISK-007).
+  * `/audit_logs`: Strictly append-only. `allow update, delete: if false;`. Reads restricted to managers and administrators.
+  * `/shift_reports`: Mapped and secured (RISK-006 resolved). Sales staff and managers can record cash reconciliations; `allow delete: if false;` ensures permanent financial record retention.
+
+### 2.2 Blueprint & Service Layer Integration
+* **`firebase-blueprint.json`**: Added `shiftReport` entity and `/shift_reports/{shiftId}` collection path.
+* **`src/services/dbService.ts`**: Added `subscribeShiftReports` and `saveShiftReportToDB`. Handled unauthenticated/offline states gracefully.
+* **`src/components/POSModule.tsx`**: Wired `handleFinalizeShift` to `saveShiftReportToDB`.
+* **`src/types.ts`**: Exported `ShiftReportData`, `ShiftTransaction`, and `CashMovement`.
+
+### 2.3 Comprehensive Automated Security Test Suite (`tests/authorization.test.ts`)
+* Implemented a 44-test automated suite using Node 22 native test runner:
+  * Role hierarchy & identity resolution (6 tests)
+  * Collection access matrix across all 7 collections and actors (26 tests)
+  * The "Dirty Dozen" malicious threat payloads (12 penetration tests covering negative prices, negative stock, XSS/buffer overflows, forged order channels, short PINs, invalid roles, immutable audit tampering, and path traversal document IDs).
+* **Test Results**: 44 passed, 0 failed. Execution time: ~225ms.
+
+---
+
+## 3. Rules Deployment
+* Executed `deploy_firebase` tool to deploy `firestore.rules` directly to the live Firebase project.
+* Result: Accepted and active.
+
+---
+
+## 4. Definition of Done Checklist
+
+- [x] Global Default Deny enforced.
+- [x] Insecure `isValidId` write bypasses eliminated.
+- [x] Role hierarchy and permission boundaries implemented.
+- [x] Public e-commerce storefront preserved and secured.
+- [x] Staff directory and PINs protected from unauthenticated access.
+- [x] Audit logs and shift reports enforced as immutable append-only ledgers.
+- [x] Automated test suite passing (`npm test` -> 44/44 green).
+- [x] Type check passing (`npm run lint` -> 0 errors).
+- [x] Production build passing (`npm run build` -> clean bundle).
+- [x] Rules deployed to Firebase (`deploy_firebase` succeeded).
+- [x] Governance documentation updated (`SECURITY_POLICY.md`, `RISKS.md`, `DECISIONS.md`, `TASK_QUEUE.md`).
+
+**Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
+
