@@ -1,0 +1,10 @@
+{
+  "name": "Nexus POS-Commerce Suite",
+  "description": "An enterprise-grade Inventory Management and Point-of-Sale (POS) dashboard with complete Reports & Analytics (Inventory, Sales, Financial), automated invoice printing, multi-branch audit tracking, CRM loyalty directories, and an e-commerce storefront.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
