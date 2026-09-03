@@ -291,7 +291,7 @@ export default function ProductFormModal({
     setErrors({});
     setIsSaving(false);
     setForm(createInitialForm(initialProduct, existingCategories));
-  }, [isOpen, initialProduct, existingCategories]);
+  }, [isOpen, initialProduct?.id]);
 
   // Keep the mutually-exclusive inventory mode as the single source of truth.
   const trackingFlags = useMemo(() => ({

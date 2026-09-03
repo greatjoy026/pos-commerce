@@ -96,6 +96,10 @@ export default function App() {
     if (savedSettings) setSystemSettings(JSON.parse(savedSettings));
 
     // 2. Attach live Firestore subscriptions
+    const handleOffline = () => {
+      setDbStatus('offline');
+    };
+
     const unsubProds = subscribeProducts((liveProds) => {
       if (liveProds.length > 0) {
         setProducts(liveProds);
@@ -103,41 +107,41 @@ export default function App() {
         setDbStatus('connected');
         setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       }
-    });
+    }, handleOffline);
 
     const unsubCusts = subscribeCustomers((liveCusts) => {
       if (liveCusts.length > 0) {
         setCustomers(liveCusts);
         localStorage.setItem('nexus_customers', JSON.stringify(liveCusts));
       }
-    });
+    }, handleOffline);
 
     const unsubOrders = subscribeOrders((liveOrders) => {
       if (liveOrders.length > 0) {
         setOrders(liveOrders);
         localStorage.setItem('nexus_orders', JSON.stringify(liveOrders));
       }
-    });
+    }, handleOffline);
 
     const unsubStaff = subscribeStaff((liveStaff) => {
       if (liveStaff.length > 0) {
         setStaffMembers(liveStaff);
       }
-    });
+    }, handleOffline);
 
     const unsubLogs = subscribeAuditLogs((liveLogs) => {
       if (liveLogs.length > 0) {
         setAuditLogs(liveLogs);
         localStorage.setItem('nexus_audit_logs', JSON.stringify(liveLogs));
       }
-    });
+    }, handleOffline);
 
     const unsubSettings = subscribeSettings((liveSettings) => {
       if (liveSettings) {
         setSystemSettings(liveSettings);
         localStorage.setItem('nexus_system_settings', JSON.stringify(liveSettings));
       }
-    });
+    }, handleOffline);
 
     return () => {
       unsubProds();

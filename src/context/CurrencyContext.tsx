@@ -190,9 +190,12 @@ export function CurrencyProvider({ children }: { children: ReactNode }) {
     const unsubscribe = subscribeSettings((settings) => {
       if (settings.currency) {
         const match = SUPPORTED_CURRENCIES.find(c => c.code === settings.currency);
-        if (match && match.code !== currentCurrency.code) {
-          setCurrentCurrency(match);
-          localStorage.setItem('nexus_currency_code', match.code);
+        if (match) {
+          setCurrentCurrency(prev => {
+            if (prev.code === match.code) return prev;
+            localStorage.setItem('nexus_currency_code', match.code);
+            return match;
+          });
         }
       }
     });

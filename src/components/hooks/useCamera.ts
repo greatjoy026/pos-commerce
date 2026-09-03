@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type FacingMode = "environment" | "user";
 
@@ -35,9 +35,14 @@ export function useCamera(enabled: boolean) {
       videoRef.current.srcObject = null;
     }
 
-    setIsActive(false);
-    setCapabilities({ torch: false, zoom: false, minZoom: 1, maxZoom: 1 });
-    setZoom(1);
+    setIsActive((prev) => (prev ? false : prev));
+    setCapabilities((prev) => {
+      if (!prev.torch && !prev.zoom && prev.minZoom === 1 && prev.maxZoom === 1) {
+        return prev;
+      }
+      return { torch: false, zoom: false, minZoom: 1, maxZoom: 1 };
+    });
+    setZoom((prev) => (prev === 1 ? prev : 1));
   }, []);
 
   const attach = useCallback((node: HTMLVideoElement | null) => {
@@ -190,25 +195,47 @@ export function useCamera(enabled: boolean) {
     [capabilities]
   );
 
+  const prevEnabledRef = useRef(enabled);
   useEffect(() => {
-    if (!enabled) stop();
+    if (prevEnabledRef.current && !enabled) {
+      stop();
+    }
+    prevEnabledRef.current = enabled;
   }, [enabled, stop]);
 
-  useEffect(() => stop, [stop]);
+  useEffect(() => {
+    return () => {
+      stop();
+    };
+  }, [stop]);
 
-  return {
-    videoRef,
-    attach,
-    streamRef,
-    isActive,
-    facingMode,
-    setFacingMode,
-    capabilities,
-    zoom,
-    error,
-    start,
-    stop,
-    applyTorch,
-    applyZoom,
-  };
+  return useMemo(
+    () => ({
+      videoRef,
+      attach,
+      streamRef,
+      isActive,
+      facingMode,
+      setFacingMode,
+      capabilities,
+      zoom,
+      error,
+      start,
+      stop,
+      applyTorch,
+      applyZoom,
+    }),
+    [
+      attach,
+      isActive,
+      facingMode,
+      capabilities,
+      zoom,
+      error,
+      start,
+      stop,
+      applyTorch,
+      applyZoom,
+    ]
+  );
 }

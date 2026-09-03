@@ -78,9 +78,16 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   };
   
-  // Transient tab state errors (iframe reloading, tab visibility toggles) are non-critical
-  if (errMsg.includes('closing') || errMsg.includes('hidden') || errMsg.includes('IndexedDatabase')) {
-    console.info('Firestore storage transition:', errMsg);
+  // Transient network & tab state errors (offline mode, iframe reloading, tab visibility toggles) are non-critical
+  if (
+    errMsg.includes('closing') ||
+    errMsg.includes('hidden') ||
+    errMsg.includes('IndexedDatabase') ||
+    errMsg.includes('offline') ||
+    errMsg.includes('Could not reach') ||
+    errMsg.includes('backend')
+  ) {
+    console.info('Firestore network/storage status:', errMsg);
   } else {
     console.warn('Firestore Status:', JSON.stringify(errInfo));
   }

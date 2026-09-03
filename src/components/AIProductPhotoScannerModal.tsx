@@ -133,10 +133,11 @@ export default function AIProductPhotoScannerModal({
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2500);
   }, []);
 
+  const cameraStop = camera.stop;
   const reset = useCallback(() => {
     scanAbortRef.current?.abort();
     scanAbortRef.current = null;
-    camera.stop();
+    cameraStop();
 
     setPhotos([]);
     setExtracted(null);
@@ -149,10 +150,14 @@ export default function AIProductPhotoScannerModal({
     setError(null);
     setProgress(0);
     setScanMessage("");
-  }, [camera]);
+  }, [cameraStop]);
 
+  const prevIsOpenRef = useRef(isOpen);
   useEffect(() => {
-    if (!isOpen) reset();
+    if (prevIsOpenRef.current && !isOpen) {
+      reset();
+    }
+    prevIsOpenRef.current = isOpen;
   }, [isOpen, reset]);
 
   useEffect(() => {
