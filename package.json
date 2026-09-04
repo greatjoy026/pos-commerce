@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/authorization.test.ts",
+    "test": "tsx --test tests/authorization.test.ts tests/product-domain.test.ts",
+    "test:domain": "tsx --test tests/product-domain.test.ts",
     "test:emulator": "firebase emulators:exec --only firestore --project gen-lang-client-0207800002 \"npx tsx --test tests/emulator-rules.test.ts\""
   },
   "dependencies": {

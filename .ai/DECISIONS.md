@@ -152,4 +152,23 @@ This register records foundational architectural decisions for `greatjoy026/pos-
   4. Role updates must be processed via trusted server logic that synchronously updates custom claims and the staff document, followed by token revocation when privileges are reduced.
 * **Consequences**: Prevents client-side document tampering from escalating access rights. Full server-side synchronization engine tracked as follow-up task `SEC-002`.
 
+---
+
+### ADR-013: Canonical Product Domain Model & Adapter Architecture
+
+* **Status**: `IMPLEMENTED (PROD-001)`
+* **Context**: The `Product` interface in `src/types.ts` mixed identity, catalog merchandising, classification, lifecycle, variants, multiple competing packaging representations, and operational inventory state (costs, suppliers, locations, reorder points, serials, batches). POS and E-Commerce consumers accessed this bloated structure directly, and public catalog projections required ad-hoc field stripping.
+* **Decision**:
+  1. Establish a canonical domain model in `src/domain/product/`:
+     - `CanonicalProduct` aggregates merchandising, classification, lifecycle, variants, and operational state.
+     - `CanonicalVariant` represents physical/marketable options with explicit attributes and pricing.
+     - `ProductSku` represents the authoritative sellable unit.
+  2. Implement an Authoritative SKU Resolution Engine (`resolveProductSku`) capable of resolving base SKUs, base barcodes, variant SKUs, variant barcodes, and packaging unit barcodes/SKUs.
+  3. Establish a non-destructive bidirectional Normalization Layer (`normalizeProduct`) that wraps legacy and Firestore documents into the canonical structure while preserving full backward compatibility for existing consumers (`p.name`, `p.price`, `p.stock`, `p.variants`).
+  4. Single-SKU products without variants are automatically normalized into a default canonical variant, guaranteeing that every product aggregate has at least one sellable variant.
+  5. Centralize public catalog projection (`toPublicCatalogProjection`) to strictly enforce the SEC-001/SEC-005 security boundary (stripping wholesale costs, supplier info, internal serials, and reorder levels).
+  6. Operational inventory ledger decoupling is cleanly isolated for `INV-001`.
+* **Consequences**: Both POS and E-Commerce consume the same authoritative catalog model. Zero logic duplication for SKU/barcode resolution. Backwards compatibility preserved without breaking running components or existing Firestore schemas.
+
+
 

@@ -16,6 +16,7 @@ import {
   Category,
   ExtractedProductInfo,
 } from '../types';
+import { normalizeProduct } from '../domain/product';
 
 import StepBasicInfo from './product-form/StepBasicInfo';
 import StepVariants from './product-form/StepVariants';
@@ -549,7 +550,7 @@ export default function ProductFormModal({
     if (isSaving) return;
     if (!validateAll()) return;
 
-    const product = buildProduct(finalStatus);
+    const product = normalizeProduct(buildProduct(finalStatus));
 
     setIsSaving(true);
     try {

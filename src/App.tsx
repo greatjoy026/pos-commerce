@@ -4,6 +4,7 @@ import {
   INITIAL_ORDERS, INITIAL_AUDIT_LOGS 
 } from './data/mockData';
 import { Product, Customer, StaffMember, Order, AuditLog, SystemSettings } from './types';
+import { normalizeProduct } from './domain/product';
 import { 
   seedInitialFirestoreData,
   subscribeProducts, saveProductToDB, deleteProductFromDB,
@@ -36,7 +37,7 @@ import {
 
 export default function App() {
   // Database States
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  const [products, setProducts] = useState<Product[]>(() => INITIAL_PRODUCTS.map(p => normalizeProduct(p)));
   const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>(INITIAL_STAFF);
   const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS);
@@ -89,7 +90,14 @@ export default function App() {
     const savedLogs = localStorage.getItem('nexus_audit_logs');
     const savedSettings = localStorage.getItem('nexus_system_settings');
 
-    if (savedProds) setProducts(JSON.parse(savedProds));
+    if (savedProds) {
+      try {
+        const parsed = JSON.parse(savedProds);
+        if (Array.isArray(parsed)) setProducts(parsed.map(p => normalizeProduct(p)));
+      } catch (e) {
+        // use fallback
+      }
+    }
     if (savedCusts) setCustomers(JSON.parse(savedCusts));
     if (savedOrders) setOrders(JSON.parse(savedOrders));
     if (savedLogs) setAuditLogs(JSON.parse(savedLogs));

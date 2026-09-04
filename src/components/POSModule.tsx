@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Product, Customer, PaymentMethod, Order, Coupon, ParkedOrder, PackagingUnit, CartItem } from '../types';
+import { resolveProductSku } from '../domain/product';
 import { useCurrency } from '../context/CurrencyContext';
 import { 
   ShoppingBag, Search, Plus, Minus, UserPlus, CreditCard, 
@@ -353,17 +354,33 @@ export default function POSModule({
       }
     }
 
-    // 2. Look for exact product barcode, exact SKU, QR code, or variant
-    const match = products.find(p => 
-      p.barcode.toLowerCase() === clean || 
-      p.sku.toLowerCase() === clean ||
-      (p.qrCode && p.qrCode.toLowerCase() === clean) ||
-      (p.variants && p.variants.some(v => v.sku.toLowerCase() === clean))
-    );
+    // 2. Look for exact product barcode, exact SKU, QR code, variant, or unit via canonical SKU resolver
+    let match: Product | undefined;
+    let resolvedVariantSku: string | undefined;
+    let resolvedUnit: PackagingUnit | undefined;
+
+    for (const p of products) {
+      const res = resolveProductSku(p, clean);
+      if (res) {
+        match = p;
+        if (res.matchType === 'variant_sku' || res.matchType === 'variant_barcode') {
+          resolvedVariantSku = res.sku;
+        } else if (res.matchType === 'packaging_unit' && res.packagingUnit) {
+          resolvedUnit = {
+            id: res.packagingUnit.id,
+            unitName: res.packagingUnit.unitName,
+            multiplier: res.packagingUnit.multiplier,
+            base_unit: p.unit || 'Piece',
+            sellingPrice: res.packagingUnit.sellingPrice,
+            isPackUnit: res.packagingUnit.multiplier > 1
+          };
+        }
+        break;
+      }
+    }
 
     if (match) {
-      const variantMatch = match.variants?.find(v => v.sku.toLowerCase() === clean);
-      addToCart(match, variantMatch ? variantMatch.sku : (match.variants?.[0]?.sku || undefined));
+      addToCart(match, resolvedVariantSku, resolvedUnit);
       triggerToast(`⚡ Laser Scanned: ${match.name} [${symbology || 'BARCODE'}]`, 'success');
       setBarcodeInput('');
     } else {
@@ -379,12 +396,15 @@ export default function POSModule({
       return;
     }
     const clean = searchTerm.trim().toLowerCase();
-    const exactMatch = products.find(p => 
-      p.barcode.toLowerCase() === clean || 
-      p.sku.toLowerCase() === clean ||
-      (p.qrCode && p.qrCode.toLowerCase() === clean) ||
-      (p.variants && p.variants.some(v => v.sku.toLowerCase() === clean))
-    );
+    
+    // Check canonical SKU resolution first
+    let exactMatch: Product | undefined;
+    for (const p of products) {
+      if (resolveProductSku(p, clean)) {
+        exactMatch = p;
+        break;
+      }
+    }
 
     if (exactMatch) {
       handleLaserScanSuccess(searchTerm.trim(), 'KEYBOARD-WEDGE');

@@ -17,10 +17,10 @@
 * **Severity**: **HIGH (P1)**
 * **Category**: Data Integrity / Maintainability
 * **Identified in**: `src/types.ts` (`Product`, `ProductPackagingConfig`, `PackagingUnitsConfig`, `BulkPackagingConfig`)
-* **Status**: `OPEN / UNRESOLVED` — Pending `PROD-001`.
-* **Description**: Multiple parallel representations of packaging, variants, and inventory tracking exist across different versions of the product interface. Different components access different fields (e.g. `packaging.unitsPerPackage` vs `packagingUnits[].multiplier`).
-* **Impact**: Inconsistent updates, subtle inventory calculation discrepancies, and maintenance friction as new product types are introduced.
-* **Required Follow-up Task**: `PROD-001 — Product Domain Normalization`.
+* **Status**: `MITIGATED (PROD-001)` — Canonical domain architecture established in `src/domain/product/`. Legacy `Product` objects are deterministically normalized into `CanonicalProduct` aggregates with single authoritative SKU resolution, consolidated UOM packaging units, and strict public projection stripping internal operational fields. Full backward compatibility maintained with 18 automated domain tests.
+* **Description**: Multiple parallel representations of packaging, variants, and inventory tracking formerly existed across different versions of the product interface. Different components accessed different fields (e.g. `packaging.unitsPerPackage` vs `packagingUnits[].multiplier`).
+* **Impact**: Resolved via `normalizeProduct` engine and authoritative `resolveProductSku` resolver.
+* **Required Follow-up Task**: `INV-001 — SKU and Inventory Architecture` (to decouple inventory balance ledger).
 
 ---
 

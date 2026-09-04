@@ -1,3 +1,6 @@
+import type { CanonicalProduct, CanonicalVariant, ProductSku } from './domain/product/types';
+export type { CanonicalProduct, CanonicalVariant, ProductSku };
+
 export type StaffRole = 
   | 'Super Admin'
   | 'Business Owner'
@@ -392,6 +395,8 @@ export interface Product {
   pricingTiers?: ProductPricingTiers;
   inventoryRules?: ProductInventoryRules;
   ecommerce?: ProductEcommerce | ProductEcommerceConfig;
+  /** Canonical Product domain aggregate representation (PROD-001) */
+  canonical?: CanonicalProduct;
 }
 
 export interface PublicProductProjection {

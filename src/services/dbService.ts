@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { Product, PublicProductProjection, Customer, StaffMember, Order, AuditLog, SystemSettings, PublicSettingsProjection, ShiftReportData } from '../types';
+import { normalizeProduct, toPublicCatalogProjection } from '../domain/product';
 import { 
   INITIAL_PRODUCTS, 
   INITIAL_CUSTOMERS, 
@@ -331,41 +332,10 @@ export async function seedInitialFirestoreData(): Promise<{ seeded: boolean; mes
 /**
  * Public Catalog Projection Helper:
  * Strips confidential costs, suppliers, internal reorder levels, and tracking numbers.
+ * Delegates to the canonical domain projection engine (PROD-001).
  */
 export function projectPublicProduct(p: Product): PublicProductProjection {
-  return {
-    id: p.id,
-    name: p.name,
-    sku: p.sku,
-    price: p.price,
-    stock: p.stock,
-    category: p.category,
-    imageUrl: p.imageUrl,
-    description: p.description,
-    brand: p.brand,
-    model: p.model,
-    rating: p.rating,
-    reviewCount: p.reviewCount,
-    originalPrice: p.originalPrice,
-    discountPercent: p.discountPercent,
-    isNewArrival: p.isNewArrival,
-    isBestSeller: p.isBestSeller,
-    isFeatured: p.isFeatured,
-    images: p.images,
-    specifications: p.specifications,
-    reviews: p.reviews,
-    unit: p.unit,
-    publishOnline: p.publishOnline !== false,
-    variants: p.variants?.map(v => ({
-      sku: v.sku,
-      size: v.size,
-      color: v.color,
-      stock: v.stock,
-      retailPrice: v.retailPrice || p.price,
-      imageUrl: v.imageUrl,
-      isActive: v.isActive
-    }))
-  };
+  return toPublicCatalogProjection(p);
 }
 
 /**
@@ -377,7 +347,12 @@ export function subscribeProducts(onUpdate: (products: Product[]) => void, onErr
     if (!snapshot.empty) {
       const prods: Product[] = [];
       snapshot.forEach(docSnap => {
-        prods.push(docSnap.data() as Product);
+        try {
+          const rawData = docSnap.data();
+          prods.push(normalizeProduct(rawData));
+        } catch (e) {
+          prods.push(docSnap.data() as Product);
+        }
       });
       onUpdate(prods);
     } else {
@@ -412,13 +387,14 @@ export function subscribePublicProducts(onUpdate: (products: PublicProductProjec
 
 export async function saveProductToDB(product: Product): Promise<void> {
   try {
-    const docRef = doc(db, COLLECTIONS.PRODUCTS, product.id);
-    await setDoc(docRef, product, { merge: true });
+    const normalized = normalizeProduct(product);
+    const docRef = doc(db, COLLECTIONS.PRODUCTS, normalized.id);
+    await setDoc(docRef, normalized, { merge: true });
 
     // Synchronize public catalog projection if published online
-    if (product.publishOnline !== false) {
-      const pubDocRef = doc(db, COLLECTIONS.PUBLIC_PRODUCTS, product.id);
-      await setDoc(pubDocRef, projectPublicProduct(product), { merge: true });
+    if (normalized.publishOnline !== false) {
+      const pubDocRef = doc(db, COLLECTIONS.PUBLIC_PRODUCTS, normalized.id);
+      await setDoc(pubDocRef, projectPublicProduct(normalized), { merge: true });
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${COLLECTIONS.PRODUCTS}/${product.id}`);

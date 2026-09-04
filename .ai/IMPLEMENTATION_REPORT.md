@@ -378,6 +378,146 @@ Following the supervisor final review ("CHANGES REQUIRED"), the following techni
 * **Task SEC-001 Status**: **`IMPLEMENTATION COMPLETE — AWAITING REVIEW`** (Not marked approved or production-ready; submitted to supervisor for independent review).
 * **RISK-007 Status**: **`PARTIALLY MITIGATED (NOT RESOLVED)`** (Surface boundary protected; cryptographic hashing scheduled for SEC-002).
 
+---
+
+# Implementation Report: PROD-001
+
+**Task ID**: PROD-001  
+**Task Name**: Product Domain Normalization  
+**Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`  
+**Author**: Gemini (Senior Software Engineer & Implementation Lead)  
+**Date**: 2026-09-04  
+
+---
+
+## 1. Executive Summary
+
+PROD-001 establishes a canonical product domain model serving both POS and E-Commerce channels without logic duplication or competing product models. Prior to this task, the `Product` entity in `src/types.ts` conflated catalog merchandising, multi-variant options, conflicting packaging representations (`ProductPackagingConfig`, `PackagingUnitsConfig`, `BulkPackagingConfig`), and internal operational data (costs, suppliers, locations, reorder thresholds, serials, batches).
+
+In accordance with architectural instructions:
+* Established a clean canonical product model: `Product -> Variant -> SKU -> Inventory boundary`.
+* Avoided premature inventory architecture changes (**INV-001 is reserved for a future task**).
+* Built an authoritative, bidirectional normalization layer (`normalizeProduct`) guaranteeing that every product aggregate is backed by canonical variants while preserving 100% backward compatibility on the legacy `Product` interface.
+* Consolidated legacy packaging tiers into standardized Packaging Units with multipliers.
+* Centralized public catalog projection (`toPublicCatalogProjection`) to strictly enforce the SEC-001/SEC-005 security boundary (stripping wholesale costs, supplier info, internal serials, and reorder levels).
+* Delivered an authoritative SKU resolution engine (`resolveProductSku`) supporting exact SKU, barcode, variant SKU/barcode, and packaging unit lookup.
+* Implemented 18 automated domain tests (97 total test suite pass) and validated zero-error typecheck and production build.
+
+---
+
+## 2. Architecture & Normalization Design
+
+### 2.1 Canonical Aggregate Model (`/src/domain/product/types.ts`)
+The new canonical model isolates product concerns into orthogonal domain facets:
+1. **Merchandising**: Display title, subtitle, descriptions, brand, categories, tags, media assets, rating, public specifications.
+2. **Classification**: `ProductType` ('STANDARD', 'VARIANT', 'COMPOSITE', 'BUNDLE', 'SERVICE', 'DIGITAL', 'RENTAL'), tax categories, returnability flags.
+3. **Lifecycle**: Status ('DRAFT', 'ACTIVE', 'ARCHIVED', 'DISCONTINUED'), channel visibility flags (POS sellable, Web storefront published, B2B wholesale).
+4. **Variants & SKUs**: List of authoritative `CanonicalVariant` instances, each having an authoritative SKU, barcode, physical attributes (size, color, material, etc.), retail and wholesale pricing, and default variant marker.
+5. **Operational State**: Location, tracking mode, stock rotation method (FIFO, FEFO, LIFO), unit of measure, and initial catalog stock balance.
+6. **Packaging Units (UOM)**: Standardized array of `PackagingUnitInfo` defining selling unit names, base units, quantity multipliers, barcodes, and package-specific pricing.
+
+### 2.2 Single-SKU vs. Multi-Variant Unification
+* **Single-SKU Items**: Legacy products without variants are automatically normalized into exactly **one default canonical variant** (`isDefault: true`), with its SKU, barcode, retail price, cost price, and stock matching the parent product. This guarantees that all downstream checkout and inventory mechanisms can reliably resolve at least one variant.
+* **Multi-Variant Items**: Normalized into explicit `CanonicalVariant` entities preserving distinct variant SKUs, barcodes, attributes, retail prices, and costs. The first variant is marked `isDefault: true`.
+
+### 2.3 Authoritative SKU Resolution Engine (`/src/domain/product/skuService.ts`)
+The `resolveProductSku` function serves as the single source of truth for barcode scanners (laser/camera) and manual search inputs across both POS and Storefront:
+1. Matches base product SKU (case-insensitive).
+2. Matches base product barcode.
+3. Matches individual variant SKUs and barcodes, returning the specific variant ID, attributes, and variant pricing.
+4. Matches packaging unit barcodes and SKUs, returning the unit multiplier and pack pricing.
+5. Emits `ResolvedSkuMatch` with uniform metadata.
+
+### 2.4 Security & Projection Boundary (`/src/domain/product/projections.ts`)
+Enforces SEC-001-R3 and SEC-005:
+* `toPublicCatalogProjection`: Authoritative transformer that creates `PublicProductProjection`. Strictly omits:
+  - `cost` and `costPrice` (both top-level and inside variants)
+  - `supplier` and vendor identifiers
+  - `reorderPoint` and restock thresholds
+  - `serialNumbers`, `batchNumber`, and internal lot tracking data
+* Prevents data leaks to public storefront consumers while retaining complete public merchandising, variant options, and stock availability.
+
+---
+
+## 3. Files Created & Modified
+
+### Created Files (Domain Layer)
+* `/src/domain/product/types.ts`: Canonical domain models, interfaces, and public projections.
+* `/src/domain/product/normalization.ts`: Bidirectional legacy-to-canonical normalizer.
+* `/src/domain/product/skuService.ts`: Authoritative SKU resolution, catalog extraction, canonical SKU generator, and catalog uniqueness validation.
+* `/src/domain/product/validation.ts`: Domain validation rules for products, variants, SKUs, and pricing.
+* `/src/domain/product/projections.ts`: Public storefront projection and POS view adapters.
+* `/src/domain/product/index.ts`: Barrel export module.
+* `/tests/product-domain.test.ts`: 18 comprehensive automated domain tests.
+
+### Modified Files (Integration Layer)
+* `/src/types.ts`: Re-exported canonical types and added `canonical?: CanonicalProduct` to legacy `Product`.
+* `/src/services/dbService.ts`: Integrated `normalizeProduct` on Firestore reads (`subscribeProducts`) and `toPublicCatalogProjection` on product writes.
+* `/src/App.tsx`: Initialized and hydrated state with `normalizeProduct`.
+* `/src/components/POSModule.tsx`: Replaced ad-hoc string checks in barcode laser scanner and search with authoritative `resolveProductSku`.
+* `/src/components/ProductFormModal.tsx`: Ensured `handleFinalSave` runs through `normalizeProduct`.
+* `/package.json`: Updated `test` script to execute both authorization and domain suites.
+* `/.ai/DECISIONS.md`: Added ADR-013.
+* `/.ai/RISKS.md`: Updated RISK-002 to `MITIGATED (PROD-001)`.
+* `/.ai/TASK_QUEUE.md`: Updated task statuses.
+* `/.ai/REVIEW_QUEUE.md`: Submitted PROD-001 for review.
+
+---
+
+## 4. Verification & Test Results
+
+| Test Suite | File | Tests Passing | Failures | Status |
+|---|---|---|---|---|
+| **Product Domain Normalization** | `tests/product-domain.test.ts` | **18 / 18** | 0 | **PASS** |
+| **Firestore Authorization Matrix** | `tests/authorization.test.ts` | **79 / 79** | 0 | **PASS** |
+| **Combined Regression Suite** | `npm test` | **97 / 97** | 0 | **PASS** |
+| **Type Check & Linting** | `npm run lint` (`tsc --noEmit`) | Clean (0 errors) | 0 | **PASS** |
+| **Application Production Build** | `npm run build` (`vite build`) | Built successfully | 0 | **PASS** |
+
+### Domain Test Breakdown (18 Tests)
+1. **Canonical Product Normalization** (3 tests):
+   - Single-SKU product normalization to 1 default canonical variant.
+   - Multi-variant product normalization with attributes, pricing, and variant SKUs.
+   - Packaging selling tier consolidation into standardized packaging units.
+2. **Authoritative SKU Resolution Engine** (6 tests):
+   - Resolution by base product SKU.
+   - Resolution by base product barcode.
+   - Resolution by variant SKU (correct pricing and attributes).
+   - Resolution by variant barcode.
+   - Resolution by packaging unit barcode with multiplier.
+   - Rejection of uncataloged barcodes/SKUs.
+3. **Product Validation Rules & SKU Constraints** (4 tests):
+   - SKU string format validation (length, characters).
+   - Rejection of missing names, missing SKUs, negative prices, and negative costs.
+   - Detection of duplicate variant SKUs within the same product aggregate.
+   - Approval of fully valid products with unique variants.
+4. **Public Catalog Projection Security Boundary** (1 test):
+   - Strict omission of wholesale costs, suppliers, serials, batch numbers, and reorder points.
+   - Strict omission of variant `costPrice`.
+5. **Catalog-Wide SKU Extraction & Uniqueness Engine** (3 tests):
+   - Extraction of all sellable SKUs from single-item and multi-variant products.
+   - Catalog-wide uniqueness enforcement (case-insensitive, exclude self on edit).
+   - Standardized canonical SKU generation (`prefix + attributes`).
+6. **POS & Consumer View Adapters** (1 test):
+   - Generation of compliant POS product view preserving cart requirements.
+
+---
+
+## 5. Scope Discipline & Separation of Concerns
+
+* **Inventory Boundaries**: In strict compliance with task instructions, **no inventory ledger redesign was performed in this task**. `Product.stock` remains the operational balance representation pending the dedicated `INV-001` task.
+* **Backward Compatibility**: Existing components (`InventoryModule`, `ReportsModule`, `ECommerceStorefront`, `CartItem`) continue to operate without modification because the legacy root properties (`p.name`, `p.price`, `p.cost`, `p.stock`, `p.variants`) are preserved alongside the canonical aggregate.
+* **Zero Duplication**: Barcode scanning and SKU resolution in POS now leverage the domain service rather than maintaining bespoke matching algorithms.
+
+---
+
+## 6. Next Steps & Queued Follow-ups
+
+1. **Supervisor Review**: Awaiting technical supervisor review for `PROD-001`.
+2. **`INV-001 — SKU and Inventory Architecture`**: Next queued task to transition from ad-hoc stock mutations to immutable `StockMovementRecord` ledger events and multi-location tracking.
+3. **`SEC-005 — Trusted Server-Side Catalog Projection`**: Cloud Function / server-side trigger to project `/products` to `/public_products` independently of client writes.
+
+
 **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
 
 

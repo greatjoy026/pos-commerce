@@ -1,6 +1,24 @@
 # Engineering Task Queue — Nexus POS-Commerce Suite
 
-## 1. Active Task
+## 1. Active Tasks
+
+### `PROD-001 — Product Domain Normalization`
+* **Priority**: P1
+* **Type**: Domain Architecture / Refactoring
+* **Owner**: Gemini (Implementation Lead)
+* **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
+* **Dependencies**: `SEC-001`
+* **Objective**: Established canonical domain layer in `/src/domain/product/` cleanly separating merchandising, classification, lifecycle, variants, and operational inventory state.
+  * Formalized `Product -> Variant -> SKU` hierarchy with authoritative SKU resolution engine.
+  * Non-destructive bidirectional normalization layer (`normalizeProduct`) preserving full backward compatibility for `Product`.
+  * Standardized single-item products to 1 default canonical variant; multi-variant products normalized with individual attributes, pricing, and barcodes.
+  * Consolidated legacy packaging tiers into standardized Packaging Units with multipliers.
+  * Centralized public catalog projection (`toPublicCatalogProjection`) strictly enforcing SEC-001/SEC-005 security boundary.
+  * Implemented 18 comprehensive domain tests (97 total test suite pass) and validated zero-error typecheck.
+
+---
+
+## 2. Completed Tasks (Awaiting Technical Supervisor Review)
 
 ### `SEC-001 — Establish Security Baseline and Firestore Authorization Boundary`
 * **Priority**: P0 (Critical)
@@ -38,13 +56,6 @@
 ---
 
 ### P1 — Domain Foundations & Core Services
-
-#### `PROD-001 — Product Domain Normalization`
-* **Priority**: P1
-* **Type**: Domain Architecture / Refactoring
-* **Dependencies**: `SEC-001`
-* **Status**: `QUEUED`
-* **Scope**: Normalize the unified product model in `src/types.ts`. Disentangle overlapping packaging configs (`ProductPackagingConfig`, `PackagingUnitsConfig`, `BulkPackagingConfig`). Formalize the `Product -> Variant -> SKU` hierarchy with backward-compatible adapters.
 
 #### `INV-001 — SKU and Inventory Architecture`
 * **Priority**: P1
