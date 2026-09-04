@@ -195,6 +195,34 @@ service cloud.firestore {
              data.taxRate is number && data.taxRate >= 0 && data.taxRate <= 100;
     }
 
+    // Public Settings Projection Schema (Safe for public storefront; STRICTLY excludes supervisor PINs, printer/network configs, webhooks, security/integration secrets)
+    function isValidPublicSettings(data) {
+      return data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 200 &&
+             data.currency is string && data.currency.size() <= 10 &&
+             data.taxRate is number && data.taxRate >= 0 && data.taxRate <= 100 &&
+             // Sensitive internal fields MUST NOT exist in public settings
+             !('supervisorPin' in data) &&
+             !('pin' in data) &&
+             !('secret' in data) &&
+             !('secrets' in data) &&
+             !('apiKey' in data) &&
+             !('apiKeys' in data) &&
+             !('webhookUrl' in data) &&
+             !('webhookUrls' in data) &&
+             !('printerSettings' in data) &&
+             !('networkSettings' in data) &&
+             !('securitySettings' in data) &&
+             !('notificationSettings' in data) &&
+             !('operationalConfig' in data) &&
+             !('credentials' in data);
+    }
+
+    // Constrained guest e-commerce customer creation (strictly requires ecom_guest channel, prohibits loyalty points manipulation)
+    function isValidGuestCustomer(data) {
+      return ('channel' in data && data.channel == 'ecom_guest') &&
+             (!('loyaltyPoints' in data) || data.loyaltyPoints == 0);
+    }
+
     function isValidShiftReport(data) {
       return data.reportId is string && data.reportId.size() > 0 && data.reportId.size() <= 128 &&
              data.terminalId is string && data.terminalId.size() > 0 && data.terminalId.size() <= 100 &&
@@ -237,6 +265,7 @@ service cloud.firestore {
     // 4. Customers Collection (CRM Directory)
     // ==========================================
     // Protected CRM: Sales staff can query directory; customers can read/update own record only.
+    // Anonymous customer creation is strictly restricted to constrained guest e-commerce flow.
     match /customers/{customerId} {
       allow get: if isValidId(customerId) && (
         isSalesStaff() || 
@@ -246,8 +275,7 @@ service cloud.firestore {
       allow create: if isValidId(customerId) && isValidCustomer(incoming()) && (
         isSalesStaff() || 
         (isAuthenticated() && request.auth.uid == customerId) || 
-        incoming().channel == 'ecom_guest' ||
-        !isAuthenticated()
+        isValidGuestCustomer(incoming())
       );
       allow update: if isValidId(customerId) && isValidCustomer(incoming()) && (
         isSalesStaff() || 
@@ -270,10 +298,11 @@ service cloud.firestore {
       allow delete: if isValidId(staffId) && isSuperAdmin();
     }
 
-    // Protected Credentials Vault: Isolated credential records, NEVER readable by clients.
+    // Protected Credentials Vault: Isolated credential records, STRICTLY client-inaccessible.
+    // Client SDKs (even Super Admin browser sessions) CANNOT read or write this collection.
+    // Management is strictly restricted to trusted server runtimes / Firebase Admin SDK.
     match /staff_credentials/{staffId} {
-      allow read, list: if false; // Deny all client-side reads
-      allow write: if isSuperAdmin(); // Writeable only by super admin / trusted server
+      allow read, write: if false;
     }
 
     // ==========================================
@@ -310,17 +339,28 @@ service cloud.firestore {
     }
 
     // ==========================================
-    // 8. System Settings Collection
+    // 8. Internal System Settings Collection (Staff Only)
     // ==========================================
-    // Public read for store name, active currency & tax configuration; manager modification only.
+    // Internal settings containing supervisor PINs, integrations, printer/network, operational configs.
+    // Public unauthenticated access is strictly blocked.
     match /settings/{settingId} {
-      allow read: if true;
+      allow read: if isStaff();
       allow create, update: if isValidId(settingId) && isManagerOrAdmin() && isValidSettings(incoming());
       allow delete: if false;
     }
 
     // ==========================================
-    // 9. Shift Reports Collection
+    // 9. Public Settings Projection Collection (Storefront Safe)
+    // ==========================================
+    // Public read for customer storefront (business name, currency, tax rate); internal configs omitted.
+    match /public_settings/{settingId} {
+      allow read: if true;
+      allow create, update: if isValidId(settingId) && isManagerOrAdmin() && isValidPublicSettings(incoming());
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // 10. Shift Reports Collection
     // ==========================================
     // Cashier float reconciliation & Z-reports; permanent financial records (no deletion).
     match /shift_reports/{shiftId} {
@@ -331,7 +371,7 @@ service cloud.firestore {
     }
 
     // ==========================================
-    // 10. Diagnostic Test Connection Document
+    // 11. Diagnostic Test Connection Document
     // ==========================================
     match /test/{testId} {
       allow read: if isValidId(testId);

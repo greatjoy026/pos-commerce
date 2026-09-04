@@ -8,14 +8,17 @@
 * **Owner**: Gemini (Implementation Lead)
 * **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
 * **Dependencies**: `ARCH-001`
-* **Objective**: Replaced insecure `isValidId(documentId)` rules in `firestore.rules` with a hardened server-enforced authorization system. Completed supervisor correction requirements SEC-001-F1 through F7:
-  * Established single-enterprise boundary rejecting foreign tenant IDs (F1).
-  * Implemented dual-collection catalog model with `/public_products` projection stripping sensitive cost/supplier fields (F2).
-  * Segregated staff credentials into client-inaccessible `/staff_credentials` vault (F3).
-  * Enforced untrusted client input boundaries for e-commerce orders, mandating `Pending` status and preventing client-forged `Completed`/`Paid` states (F4).
-  * Authored and executed a 51-test suite against the local Firebase Firestore Emulator (`tests/emulator-rules.test.ts`) with 100% pass rate (F5).
-  * Adhered to the production deployment constraint by verifying via emulator prior to supervisor review (F6).
-  * Maintained governance risk tracking without prematurely closing partial mitigations (F7).
+* **Objective**: Replaced insecure `isValidId(documentId)` rules in `firestore.rules` with a hardened server-enforced authorization system. Completed supervisor correction requirements SEC-001-F1 through F7 and Final Review corrections SEC-001-R1 through R7:
+  * **SEC-001-R1**: Created strict `/public_settings` projection; restricted `/settings` to internal staff (`isStaff()`). Stripped supervisor PINs, secrets, and integration URLs from public access.
+  * **SEC-001-R2**: Constrained anonymous customer creation to guest checkout with channel `ecom_guest` and 0 loyalty points; enforced owner updates and prevented cross-customer tampering.
+  * **SEC-001-R3**: Reinforced dual-collection product model (`/products` vs `/public_products`), strictly forbidding cost, supplier, and reorder fields from public projection. Documented client-side dual-write limitation as temporary compatibility.
+  * **SEC-001-R4**: Hardened `/staff_credentials` vault to deny all client SDK reads and writes (`allow read, write: if false;`), reserving access exclusively to trusted server environments via Firebase Admin SDK.
+  * **SEC-001-R5**: Documented authoritative role model, establishing Firebase Auth custom claims precedence over Firestore `/staff` documents and outlining token revocation workflows.
+  * **SEC-001-R6**: Enforced append-only immutability on `/audit_logs` and documented client-side metadata limitations requiring future trusted server audit writer.
+  * **SEC-001-R7**: Enforced untrusted e-commerce client boundaries, mandating `Pending` status and `Pending`/`Unpaid` payment status, and documented client-side price/total limitations.
+  * **Test Verification**: 63/63 integration tests passing against local Firebase Firestore Emulator (`tests/emulator-rules.test.ts`) and 79/79 unit tests passing (`tests/authorization.test.ts`).
+  * **Production Deployment**: Intentionally held (`NO`) pending supervisor review.
+
 
 ---
 

@@ -29,23 +29,26 @@
 ### Task ID: `SEC-001`
 * **Task Title**: Firestore Authorization & Security Hardening
 * **Submitter**: Gemini (Senior Software Engineer & Implementation Lead)
-* **Date Submitted**: 2026-09-03
+* **Date Submitted**: 2026-09-04
 * **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
 * **Designated Reviewer**: Architecture & Technical Supervisor
 * **Implementation Report**: `.ai/IMPLEMENTATION_REPORT.md` (Section 5)
 * **Deliverables**:
-  * `/firestore.rules` (Single-enterprise boundary, RBAC, public_products projection, staff_credentials vault, e-commerce validation)
-  * `/firebase-blueprint.json` (Schema updates for `publicProduct` and `staffCredentials`)
-  * `/src/services/dbService.ts` (Dual-write product projection synchronization)
-  * `/tests/emulator-rules.test.ts` (Firebase Firestore Emulator test suite: 51/51 tests passing)
-  * `/tests/authorization.test.ts` (Logical simulator test suite: 46/46 tests passing)
-  * `.ai/SECURITY_POLICY.md`
-  * `.ai/DECISIONS.md` (ADR-007, ADR-008)
-  * `.ai/RISKS.md` (RISK-001, RISK-002, RISK-003, RISK-004, RISK-007)
+  * `/firestore.rules` (Single-enterprise boundary, RBAC, public_products projection, public_settings projection, staff_credentials vault, e-commerce validation)
+  * `/firebase-blueprint.json` (Schema updates for `publicProduct`, `publicSettings`, and `staffCredentials`)
+  * `/src/types.ts` (`PublicSettings` interface, `Customer` guest channel support)
+  * `/src/services/dbService.ts` (Dual-write product projection and public settings projection synchronization)
+  * `/tests/emulator-rules.test.ts` (Firebase Firestore Emulator test suite: 63/63 tests passing on local emulator with Java 21)
+  * `/tests/authorization.test.ts` (Logical simulator test suite: 79/79 tests passing)
+  * `.ai/SECURITY_POLICY.md` (Updated matrix, Section 8 specifications for R1 through R7)
+  * `.ai/DECISIONS.md` (ADR-007 through ADR-012)
+  * `.ai/RISKS.md` (RISK-001 through RISK-011)
   * `.ai/TASK_QUEUE.md`
   * `.ai/IMPLEMENTATION_REPORT.md`
-* **Emulator Test Results**: 51/51 PASS (0 failures) on local Firebase Emulator.
-* **Production Deployment Status**: Held pending supervisor review per SEC-001-F6 directive.
+* **Emulator Test Results**: 63/63 PASS (0 failures) on local Firebase Firestore Emulator.
+* **Unit Test Results**: 79/79 PASS (0 failures) on authorization test suite.
+* **Production Deployment Status**: Held pending supervisor review per SEC-001-F6 directive (Status: NO).
+
 
 ---
 

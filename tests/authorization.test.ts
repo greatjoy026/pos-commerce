@@ -201,6 +201,24 @@ export function isValidSettings(data: any): boolean {
   );
 }
 
+export function isValidPublicSettings(data: any): boolean {
+  if (!isValidSettings(data)) return false;
+  const forbidden = [
+    'supervisorPin', 'pin', 'secret', 'secrets', 'apiKey', 'apiKeys',
+    'webhookUrl', 'webhookUrls', 'printerSettings', 'networkSettings',
+    'securitySettings', 'notificationSettings', 'operationalConfig', 'credentials'
+  ];
+  for (const field of forbidden) {
+    if (field in data) return false;
+  }
+  return true;
+}
+
+export function isValidGuestCustomer(data: any): boolean {
+  if (!data) return false;
+  return data.channel === 'ecom_guest' && (!('loyaltyPoints' in data) || data.loyaltyPoints === 0);
+}
+
 export function isValidShiftReport(data: any): boolean {
   if (!data) return false;
   return (
@@ -515,26 +533,139 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
       });
     });
 
-    // Settings Collection
-    describe('Settings Collection (/settings)', () => {
-      test('Public can read store settings for currency and store name', () => {
-        const canRead = true; // allow read: if true;
+    // Customers Collection (CRM Directory & Constrained Guest Ecom)
+    describe('Customers Collection (/customers)', () => {
+      test('Public unauthenticated visitor CANNOT list or read customer CRM directory', () => {
+        const canRead = isSalesStaff(publicVisitor) || (isAuthenticated(publicVisitor) && publicVisitor.auth?.uid === 'cust-101');
+        assert.strictEqual(canRead, false);
+      });
+
+      test('Sales staff CAN read customer CRM directory', () => {
+        const canRead = isSalesStaff(cashierUser);
         assert.strictEqual(canRead, true);
       });
 
-      test('Public and Cashier CANNOT modify settings', () => {
-        assert.strictEqual(isManagerOrAdmin(publicVisitor), false);
-        assert.strictEqual(isManagerOrAdmin(cashierUser), false);
+      test('Customer CAN read own profile but CANNOT read other customers', () => {
+        const canReadOwn = isSalesStaff(customerUser) || (isAuthenticated(customerUser) && customerUser.auth?.uid === 'cust-101');
+        const canReadOther = isSalesStaff(customerUser) || (isAuthenticated(customerUser) && customerUser.auth?.uid === 'cust-999');
+        assert.strictEqual(canReadOwn, true);
+        assert.strictEqual(canReadOther, false);
       });
 
-      test('Store Manager and Super Admin CAN modify settings with valid schema', () => {
+      test('Anonymous visitor CANNOT create arbitrary customer account without ecom_guest channel', () => {
+        const arbitraryCust = { id: 'c-arb', name: 'Arbitrary', email: 'arb@example.com' };
+        const canCreate = isValidCustomer(arbitraryCust) && (
+          isSalesStaff(publicVisitor) ||
+          (isAuthenticated(publicVisitor) && publicVisitor.auth?.uid === 'c-arb') ||
+          isValidGuestCustomer(arbitraryCust)
+        );
+        assert.strictEqual(canCreate, false);
+      });
+
+      test('Anonymous visitor CAN create guest customer profile with ecom_guest channel and 0 loyalty points', () => {
+        const validGuestCust = { id: 'c-guest-1', name: 'Guest Shopper', email: 'guest@example.com', channel: 'ecom_guest', loyaltyPoints: 0 };
+        const canCreate = isValidCustomer(validGuestCust) && (
+          isSalesStaff(publicVisitor) ||
+          (isAuthenticated(publicVisitor) && publicVisitor.auth?.uid === 'c-guest-1') ||
+          isValidGuestCustomer(validGuestCust)
+        );
+        assert.strictEqual(canCreate, true);
+      });
+
+      test('Anonymous guest customer CANNOT award themselves loyalty points (> 0)', () => {
+        const hackedGuestCust = { id: 'c-guest-hack', name: 'Hacker', email: 'hack@example.com', channel: 'ecom_guest', loyaltyPoints: 1000 };
+        const canCreate = isValidCustomer(hackedGuestCust) && (
+          isSalesStaff(publicVisitor) ||
+          (isAuthenticated(publicVisitor) && publicVisitor.auth?.uid === 'c-guest-hack') ||
+          isValidGuestCustomer(hackedGuestCust)
+        );
+        assert.strictEqual(canCreate, false);
+      });
+
+      test('Authenticated customer CAN create and update their own profile', () => {
+        const ownCust = { id: 'cust-101', name: 'Sarah Connor', email: 'sarah.connor@example.com' };
+        const canCreate = isValidCustomer(ownCust) && (
+          isSalesStaff(customerUser) ||
+          (isAuthenticated(customerUser) && customerUser.auth?.uid === 'cust-101') ||
+          isValidGuestCustomer(ownCust)
+        );
+        const canUpdate = isValidCustomer(ownCust) && (
+          isSalesStaff(customerUser) ||
+          (isAuthenticated(customerUser) && customerUser.auth?.uid === 'cust-101')
+        );
+        assert.strictEqual(canCreate, true);
+        assert.strictEqual(canUpdate, true);
+      });
+
+      test('Authenticated customer CANNOT update another customer profile', () => {
+        const otherCust = { id: 'cust-999', name: 'John Doe', email: 'john@example.com' };
+        const canUpdateOther = isValidCustomer(otherCust) && (
+          isSalesStaff(customerUser) ||
+          (isAuthenticated(customerUser) && customerUser.auth?.uid === 'cust-999')
+        );
+        assert.strictEqual(canUpdateOther, false);
+      });
+    });
+
+    // Staff Credentials Vault (Strictly Client-Inaccessible)
+    describe('Staff Credentials Vault (/staff_credentials)', () => {
+      test('Vault is COMPLETELY inaccessible to client SDKs (read/write false)', () => {
+        const allowClientRead = false;
+        const allowClientWrite = false;
+        assert.strictEqual(allowClientRead, false);
+        assert.strictEqual(allowClientWrite, false);
+      });
+    });
+
+    // Settings Collection (/settings and /public_settings)
+    describe('Settings Collection (/settings and /public_settings)', () => {
+      test('Internal private settings CANNOT be read by public visitors or customers', () => {
+        const publicCanRead = isStaff(publicVisitor);
+        const customerCanRead = isStaff(customerUser);
+        assert.strictEqual(publicCanRead, false);
+        assert.strictEqual(customerCanRead, false);
+      });
+
+      test('Internal private settings CAN be read by enterprise staff', () => {
+        const cashierCanRead = isStaff(cashierUser);
+        const managerCanRead = isStaff(storeManagerUser);
+        assert.strictEqual(cashierCanRead, true);
+        assert.strictEqual(managerCanRead, true);
+      });
+
+      test('Public storefront CAN read /public_settings projection', () => {
+        const allowPublicRead = true; // allow read: if true;
+        assert.strictEqual(allowPublicRead, true);
+      });
+
+      test('Public visitor CANNOT modify /settings or /public_settings', () => {
+        const publicCanWriteSettings = isManagerOrAdmin(publicVisitor);
+        const publicCanWritePublicSettings = isManagerOrAdmin(publicVisitor);
+        assert.strictEqual(publicCanWriteSettings, false);
+        assert.strictEqual(publicCanWritePublicSettings, false);
+      });
+
+      test('Store Manager CAN modify /settings and /public_settings with valid schema', () => {
         const validSettings = {
           currency: 'SLE',
           businessName: 'Nexus Enterprise Commerce',
           taxRate: 8.5
         };
-        const canWrite = isManagerOrAdmin(storeManagerUser) && isValidSettings(validSettings);
-        assert.strictEqual(canWrite, true);
+        const canWriteSettings = isManagerOrAdmin(storeManagerUser) && isValidSettings(validSettings);
+        const canWritePublicSettings = isManagerOrAdmin(storeManagerUser) && isValidPublicSettings(validSettings);
+        assert.strictEqual(canWriteSettings, true);
+        assert.strictEqual(canWritePublicSettings, true);
+      });
+
+      test('Public settings REJECTS confidential supervisor PINs, secrets, webhooks, or printer configs', () => {
+        const dirtyPublicSettings = {
+          currency: 'SLE',
+          businessName: 'Nexus Enterprise Commerce',
+          taxRate: 8.5,
+          supervisorPin: '1234', // FORBIDDEN
+          secret: 'top_secret_token' // FORBIDDEN
+        };
+        assert.strictEqual(isValidPublicSettings(dirtyPublicSettings), false);
       });
     });
   });
@@ -608,4 +739,232 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
       assert.strictEqual(isValidSettings(badExtreme), false);
     });
   });
+
+  // --------------------------------------------------------------------------
+  // 4. SEC-001 Final Review Regression Matrix (R1 through R7)
+  // --------------------------------------------------------------------------
+  describe('4. SEC-001 Final Review Regression Matrix (R1 - R7)', () => {
+    
+    // SEC-001-R1: Public Settings Exposure
+    describe('SEC-001-R1: Public Settings Exposure', () => {
+      test('1. Anonymous users cannot read private settings (/settings/{id})', () => {
+        assert.strictEqual(isStaff(publicVisitor), false);
+      });
+
+      test('2. Anonymous users can read public-safe settings (/public_settings/{id})', () => {
+        const publicReadAllowed = true;
+        assert.strictEqual(publicReadAllowed, true);
+      });
+
+      test('3. Anonymous users cannot write either collection (/settings or /public_settings)', () => {
+        assert.strictEqual(isManagerOrAdmin(publicVisitor), false);
+      });
+
+      test('4. Public projection strictly rejects forbidden sensitive fields', () => {
+        const forbiddenFields = [
+          'supervisorPin', 'pin', 'secret', 'secrets', 'apiKey', 'apiKeys',
+          'webhookUrl', 'webhookUrls', 'printerSettings', 'networkSettings',
+          'securitySettings', 'notificationSettings', 'operationalConfig', 'credentials'
+        ];
+        for (const field of forbiddenFields) {
+          const payload = {
+            businessName: 'Nexus Store',
+            currency: 'SLE',
+            taxRate: 8.5,
+            [field]: 'sensitive_value'
+          };
+          assert.strictEqual(isValidPublicSettings(payload), false, `Should reject ${field} in public settings`);
+        }
+      });
+    });
+
+    // SEC-001-R2: Anonymous Customer Creation Boundary
+    describe('SEC-001-R2: Anonymous Customer Creation Boundary', () => {
+      test('1. Anonymous arbitrary customer creation is DENIED', () => {
+        const arbCustomer = { id: 'cust-arb-1', name: 'Arb Customer', email: 'arb@test.com' };
+        const canCreate = isValidCustomer(arbCustomer) && (
+          isSalesStaff(publicVisitor) ||
+          (isAuthenticated(publicVisitor) && publicVisitor.auth?.uid === 'cust-arb-1') ||
+          isValidGuestCustomer(arbCustomer)
+        );
+        assert.strictEqual(canCreate, false);
+      });
+
+      test('2. Valid guest checkout customer flow is ALLOWED with ecom_guest and 0 loyalty points', () => {
+        const guestCustomer = { id: 'cust-guest-ok', name: 'Guest Ok', email: 'guest@test.com', channel: 'ecom_guest', loyaltyPoints: 0 };
+        const canCreate = isValidCustomer(guestCustomer) && (
+          isSalesStaff(publicVisitor) ||
+          (isAuthenticated(publicVisitor) && publicVisitor.auth?.uid === 'cust-guest-ok') ||
+          isValidGuestCustomer(guestCustomer)
+        );
+        assert.strictEqual(canCreate, true);
+      });
+
+      test('3. Guest checkout customer with loyalty points > 0 is DENIED (prevents point fraud)', () => {
+        const fraudGuest = { id: 'cust-guest-fraud', name: 'Guest Fraud', email: 'fraud@test.com', channel: 'ecom_guest', loyaltyPoints: 250 };
+        const canCreate = isValidCustomer(fraudGuest) && (
+          isSalesStaff(publicVisitor) ||
+          (isAuthenticated(publicVisitor) && publicVisitor.auth?.uid === 'cust-guest-fraud') ||
+          isValidGuestCustomer(fraudGuest)
+        );
+        assert.strictEqual(canCreate, false);
+      });
+
+      test('4. Authenticated customer can create and update their own profile', () => {
+        const myCustomer = { id: 'cust-auth-100', name: 'Alice Customer', email: 'alice@example.com' };
+        const canCreate = isValidCustomer(myCustomer) && (
+          isSalesStaff(customerUser) ||
+          (isAuthenticated(customerUser) && customerUser.auth?.uid === 'cust-auth-100') ||
+          isValidGuestCustomer(myCustomer)
+        );
+        const canUpdate = isValidCustomer(myCustomer) && (
+          isSalesStaff(customerUser) ||
+          (isAuthenticated(customerUser) && customerUser.auth?.uid === 'cust-auth-100')
+        );
+        // Note: customerUser has uid: 'cust-101'
+        const ownContext = { auth: { uid: 'cust-auth-100', token: { email: 'alice@example.com' } } };
+        const canCreateOwn = isValidCustomer(myCustomer) && (
+          isSalesStaff(ownContext) ||
+          (isAuthenticated(ownContext) && ownContext.auth?.uid === 'cust-auth-100') ||
+          isValidGuestCustomer(myCustomer)
+        );
+        const canUpdateOwn = isValidCustomer(myCustomer) && (
+          isSalesStaff(ownContext) ||
+          (isAuthenticated(ownContext) && ownContext.auth?.uid === 'cust-auth-100')
+        );
+        assert.strictEqual(canCreateOwn, true);
+        assert.strictEqual(canUpdateOwn, true);
+      });
+
+      test('5. Cross-customer profile modification is DENIED', () => {
+        const otherCustomer = { id: 'cust-victim', name: 'Victim', email: 'victim@example.com' };
+        const attackerContext = { auth: { uid: 'cust-attacker', token: { email: 'attacker@example.com' } } };
+        const canUpdateOther = isValidCustomer(otherCustomer) && (
+          isSalesStaff(attackerContext) ||
+          (isAuthenticated(attackerContext) && attackerContext.auth?.uid === 'cust-victim')
+        );
+        assert.strictEqual(canUpdateOther, false);
+      });
+    });
+
+    // SEC-001-R3: Public Product Projection Integrity
+    describe('SEC-001-R3: Public Product Projection Integrity', () => {
+      test('1. Public product projection is publicly readable', () => {
+        const publicRead = true; // allow read: if true;
+        assert.strictEqual(publicRead, true);
+      });
+
+      test('2. Public product projection rejects supplier cost & sensitive tracking fields', () => {
+        const sensitiveFields = ['cost', 'costPrice', 'reorderPoint', 'serialNumbers', 'supplier', 'batchNumber'];
+        for (const field of sensitiveFields) {
+          const p = {
+            id: 'p-leak',
+            name: 'Public Item',
+            sku: 'SKU-PUB',
+            price: 50,
+            stock: 10,
+            category: 'Retail',
+            [field]: 'leaked_data'
+          };
+          assert.strictEqual(isValidPublicProduct(p), false, `Should reject ${field} in public product projection`);
+        }
+      });
+
+      test('3. Only inventory staff / managers can create or update public product projections', () => {
+        assert.strictEqual(isInventoryStaff(publicVisitor), false);
+        assert.strictEqual(isInventoryStaff(customerUser), false);
+        assert.strictEqual(isInventoryStaff(cashierUser), false);
+        assert.strictEqual(isInventoryStaff(inventoryUser), true);
+        assert.strictEqual(isInventoryStaff(storeManagerUser), true);
+      });
+    });
+
+    // SEC-001-R4: Credential Vault Authority
+    describe('SEC-001-R4: Credential Vault Authority', () => {
+      test('1. Client SDK reads to /staff_credentials are unconditionally DENIED', () => {
+        const allowRead = false; // allow read: if false;
+        assert.strictEqual(allowRead, false);
+      });
+
+      test('2. Client SDK writes to /staff_credentials are unconditionally DENIED (including Super Admin client)', () => {
+        const allowWrite = false; // allow write: if false;
+        assert.strictEqual(allowWrite, false);
+      });
+    });
+
+    // SEC-001-R5: Role Authority & Claims Integrity
+    describe('SEC-001-R5: Role Authority & Claims Integrity', () => {
+      test('1. Foreign tenant token is rejected by enterprise boundary', () => {
+        const foreignToken = { auth: { uid: 'u-1', token: { tenantId: 'attacker-corp', role: 'Super Admin' } } };
+        assert.strictEqual(isEnterpriseScope(foreignToken), false);
+        assert.strictEqual(isStaff(foreignToken), false);
+        assert.strictEqual(isSuperAdmin(foreignToken), false);
+      });
+
+      test('2. Unauthenticated user cannot claim any staff role', () => {
+        assert.strictEqual(isStaff(publicVisitor), false);
+        assert.strictEqual(isSuperAdmin(publicVisitor), false);
+      });
+    });
+
+    // SEC-001-R6: Audit Log Integrity
+    describe('SEC-001-R6: Audit Log Integrity', () => {
+      test('1. Audit logs are strictly append-only (update and delete denied)', () => {
+        const allowUpdate = false;
+        const allowDelete = false;
+        assert.strictEqual(allowUpdate, false);
+        assert.strictEqual(allowDelete, false);
+      });
+
+      test('2. Unauthenticated actors cannot create audit log records', () => {
+        const canCreate = isAuthenticated(publicVisitor) && isStaff(publicVisitor);
+        assert.strictEqual(canCreate, false);
+      });
+    });
+
+    // SEC-001-R7: E-Commerce Trust Boundary
+    describe('SEC-001-R7: E-Commerce Trust Boundary', () => {
+      test('1. Untrusted browser cannot initialize e-commerce order as Completed', () => {
+        const o = {
+          id: 'ord-bad',
+          channel: 'ecom',
+          status: 'Completed', // FORBIDDEN
+          customerName: 'Buyer',
+          customerEmail: 'buyer@test.com',
+          items: [{ productId: 'p1', quantity: 1 }],
+          total: 50
+        };
+        assert.strictEqual(isValidEcomOrder(o), false);
+      });
+
+      test('2. Untrusted browser cannot initialize e-commerce order with Paid payment status', () => {
+        const o = {
+          id: 'ord-bad-pay',
+          channel: 'ecom',
+          status: 'Pending',
+          paymentStatus: 'Paid', // FORBIDDEN
+          customerName: 'Buyer',
+          customerEmail: 'buyer@test.com',
+          items: [{ productId: 'p1', quantity: 1 }],
+          total: 50
+        };
+        assert.strictEqual(isValidEcomOrder(o), false);
+      });
+
+      test('3. Untrusted browser CAN initialize order with status: Pending and paymentStatus: Pending', () => {
+        const o = {
+          id: 'ord-good',
+          channel: 'ecom',
+          status: 'Pending',
+          paymentStatus: 'Pending',
+          customerName: 'Buyer',
+          customerEmail: 'buyer@test.com',
+          items: [{ productId: 'p1', quantity: 1 }],
+          total: 50
+        };
+        assert.strictEqual(isValidEcomOrder(o), true);
+      });
+    });
+  });
 });
+

@@ -13,7 +13,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { Product, PublicProductProjection, Customer, StaffMember, Order, AuditLog, SystemSettings, ShiftReportData } from '../types';
+import { Product, PublicProductProjection, Customer, StaffMember, Order, AuditLog, SystemSettings, PublicSettingsProjection, ShiftReportData } from '../types';
 import { 
   INITIAL_PRODUCTS, 
   INITIAL_CUSTOMERS, 
@@ -32,6 +32,7 @@ export const COLLECTIONS = {
   ORDERS: 'orders',
   AUDIT_LOGS: 'audit_logs',
   SETTINGS: 'settings',
+  PUBLIC_SETTINGS: 'public_settings',
   SHIFT_REPORTS: 'shift_reports'
 } as const;
 
@@ -579,6 +580,42 @@ export async function saveAuditLogToDB(log: AuditLog): Promise<void> {
 }
 
 /**
+ * Public Settings Projection Helper
+ * Strictly extracts ONLY safe public presentation fields, discarding supervisor PINs,
+ * printer/network settings, webhooks, security policies, and internal operational configurations.
+ */
+export function toPublicSettingsProjection(settings: Partial<SystemSettings>): PublicSettingsProjection {
+  return {
+    currency: settings.currency || settings.currencyConfig?.primaryCurrency || 'SLE',
+    businessName: settings.businessName || settings.business?.companyName || 'Nexus Store',
+    taxRate: typeof settings.taxRate === 'number' ? settings.taxRate : (settings.tax?.defaultTaxRate ?? 8.5),
+    lastUpdated: new Date().toISOString(),
+    business: settings.business ? {
+      companyName: settings.business.companyName,
+      tagline: settings.business.tagline,
+      email: settings.business.email,
+      phone: settings.business.phone,
+      address: settings.business.address,
+      city: settings.business.city,
+      country: settings.business.country,
+      logoUrl: settings.business.logoUrl,
+    } : undefined,
+    currencyConfig: settings.currencyConfig ? {
+      primaryCurrency: settings.currencyConfig.primaryCurrency,
+      symbolPosition: settings.currencyConfig.symbolPosition,
+      spaceBetween: settings.currencyConfig.spaceBetween,
+      decimalPlaces: settings.currencyConfig.decimalPlaces,
+    } : undefined,
+    delivery: settings.delivery ? {
+      enableStorePickup: settings.delivery.enableStorePickup,
+      enableLocalDelivery: settings.delivery.enableLocalDelivery,
+      defaultDeliveryFee: settings.delivery.defaultDeliveryFee,
+      freeDeliveryThreshold: settings.delivery.freeDeliveryThreshold,
+    } : undefined,
+  };
+}
+
+/**
  * Settings & Currency Database Operations
  */
 export function subscribeSettings(onUpdate: (settings: SystemSettings) => void, onError?: (err: any) => void) {
@@ -609,7 +646,64 @@ export function subscribeSettings(onUpdate: (settings: SystemSettings) => void, 
       onUpdate(DEFAULT_SETTINGS);
     }
   }, (err) => {
+    // If permission denied (unauthenticated visitor or non-staff), fallback to public_settings
+    if (err && (err.code === 'permission-denied' || String(err).includes('permission-denied'))) {
+      subscribePublicSettings((publicSettings) => {
+        const fallbackSettings: SystemSettings = {
+          ...DEFAULT_SETTINGS,
+          currency: publicSettings.currency,
+          businessName: publicSettings.businessName,
+          taxRate: publicSettings.taxRate,
+          business: {
+            ...DEFAULT_SETTINGS.business,
+            companyName: publicSettings.business?.companyName || DEFAULT_SETTINGS.business.companyName,
+            tagline: publicSettings.business?.tagline || DEFAULT_SETTINGS.business.tagline,
+            email: publicSettings.business?.email || DEFAULT_SETTINGS.business.email,
+            phone: publicSettings.business?.phone || DEFAULT_SETTINGS.business.phone,
+            address: publicSettings.business?.address || DEFAULT_SETTINGS.business.address,
+            city: publicSettings.business?.city || DEFAULT_SETTINGS.business.city,
+            country: publicSettings.business?.country || DEFAULT_SETTINGS.business.country,
+            logoUrl: publicSettings.business?.logoUrl || DEFAULT_SETTINGS.business.logoUrl,
+          },
+          currencyConfig: {
+            ...DEFAULT_SETTINGS.currencyConfig,
+            primaryCurrency: publicSettings.currencyConfig?.primaryCurrency || DEFAULT_SETTINGS.currencyConfig.primaryCurrency,
+            symbolPosition: publicSettings.currencyConfig?.symbolPosition || DEFAULT_SETTINGS.currencyConfig.symbolPosition,
+            spaceBetween: publicSettings.currencyConfig?.spaceBetween ?? DEFAULT_SETTINGS.currencyConfig.spaceBetween,
+            decimalPlaces: publicSettings.currencyConfig?.decimalPlaces ?? DEFAULT_SETTINGS.currencyConfig.decimalPlaces,
+          },
+          delivery: {
+            ...DEFAULT_SETTINGS.delivery,
+            enableStorePickup: publicSettings.delivery?.enableStorePickup ?? DEFAULT_SETTINGS.delivery.enableStorePickup,
+            enableLocalDelivery: publicSettings.delivery?.enableLocalDelivery ?? DEFAULT_SETTINGS.delivery.enableLocalDelivery,
+            defaultDeliveryFee: publicSettings.delivery?.defaultDeliveryFee ?? DEFAULT_SETTINGS.delivery.defaultDeliveryFee,
+            freeDeliveryThreshold: publicSettings.delivery?.freeDeliveryThreshold ?? DEFAULT_SETTINGS.delivery.freeDeliveryThreshold,
+          }
+        };
+        onUpdate(fallbackSettings);
+      }, onError);
+      return;
+    }
     handleFirestoreError(err, OperationType.GET, `${COLLECTIONS.SETTINGS}/general`);
+    if (onError) onError(err);
+  });
+}
+
+export function subscribePublicSettings(onUpdate: (settings: PublicSettingsProjection) => void, onError?: (err: any) => void) {
+  const docRef = doc(db, COLLECTIONS.PUBLIC_SETTINGS, 'general');
+  return onSnapshot(docRef, (docSnap) => {
+    if (docSnap.exists()) {
+      const data = docSnap.data() as PublicSettingsProjection;
+      onUpdate(data);
+    } else {
+      onUpdate({
+        currency: DEFAULT_SETTINGS.currency,
+        businessName: DEFAULT_SETTINGS.businessName,
+        taxRate: DEFAULT_SETTINGS.taxRate,
+      });
+    }
+  }, (err) => {
+    handleFirestoreError(err, OperationType.GET, `${COLLECTIONS.PUBLIC_SETTINGS}/general`);
     if (onError) onError(err);
   });
 }
@@ -621,6 +715,15 @@ export async function saveSettingsToDB(settings: Partial<SystemSettings>): Promi
       ...settings,
       lastUpdated: new Date().toISOString()
     }, { merge: true });
+
+    // Synchronize safe public projection to /public_settings/general
+    try {
+      const publicDocRef = doc(db, COLLECTIONS.PUBLIC_SETTINGS, 'general');
+      const publicProjection = toPublicSettingsProjection(settings);
+      await setDoc(publicDocRef, publicProjection, { merge: true });
+    } catch (pubErr) {
+      console.warn('Non-blocking public settings sync warning:', pubErr);
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${COLLECTIONS.SETTINGS}/general`);
   }

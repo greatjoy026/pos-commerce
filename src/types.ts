@@ -826,6 +826,35 @@ export interface IntegrationSettings {
   thermalPrinterIp: string;
 }
 
+export interface PublicSettingsProjection {
+  currency: string;
+  businessName: string;
+  taxRate: number;
+  lastUpdated?: string;
+  business?: {
+    companyName?: string;
+    tagline?: string;
+    email?: string;
+    phone?: string;
+    address?: string;
+    city?: string;
+    country?: string;
+    logoUrl?: string;
+  };
+  currencyConfig?: {
+    primaryCurrency?: string;
+    symbolPosition?: 'prefix' | 'suffix';
+    spaceBetween?: boolean;
+    decimalPlaces?: number;
+  };
+  delivery?: {
+    enableStorePickup?: boolean;
+    enableLocalDelivery?: boolean;
+    defaultDeliveryFee?: number;
+    freeDeliveryThreshold?: number;
+  };
+}
+
 export interface SystemSettings {
   // Legacy / Direct access properties
   currency: string;

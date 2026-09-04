@@ -66,8 +66,17 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         publishOnline: true
       });
 
-      // Seed store settings
+      // Seed store settings (internal private with supervisor PIN)
       await setDoc(doc(adminDb, 'settings', 'general'), {
+        businessName: 'Nexus Enterprise Commerce',
+        currency: 'SLE',
+        taxRate: 8.5,
+        supervisorPin: '9999',
+        secret: 'internal_secret_token'
+      });
+
+      // Seed public-safe settings projection
+      await setDoc(doc(adminDb, 'public_settings', 'general'), {
         businessName: 'Nexus Enterprise Commerce',
         currency: 'SLE',
         taxRate: 8.5
@@ -179,6 +188,11 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       await assertFails(getDoc(doc(unauth, 'staff_credentials', 'staff-cashier-1')));
     });
 
+    it('CANNOT write to credentials vault', async () => {
+      const unauth = testEnv.unauthenticatedContext().firestore();
+      await assertFails(setDoc(doc(unauth, 'staff_credentials', 'staff-cashier-1'), { staffId: 'staff-cashier-1', hashedPin: 'evil' }));
+    });
+
     it('CANNOT list arbitrary orders or read other orders', async () => {
       const unauth = testEnv.unauthenticatedContext().firestore();
       await assertFails(getDocs(collection(unauth, 'orders')));
@@ -191,14 +205,63 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       await assertFails(getDoc(doc(unauth, 'audit_logs', 'log-100')));
     });
 
-    it('CAN read public settings (store name, currency, tax rate)', async () => {
+    it('CANNOT read private settings (/settings/general - blocks supervisor PINs and secrets)', async () => {
       const unauth = testEnv.unauthenticatedContext().firestore();
-      await assertSucceeds(getDoc(doc(unauth, 'settings', 'general')));
+      await assertFails(getDoc(doc(unauth, 'settings', 'general')));
     });
 
-    it('CANNOT modify settings', async () => {
+    it('CAN read public-safe settings projection (/public_settings/general)', async () => {
+      const unauth = testEnv.unauthenticatedContext().firestore();
+      await assertSucceeds(getDoc(doc(unauth, 'public_settings', 'general')));
+    });
+
+    it('CANNOT modify settings or public_settings', async () => {
       const unauth = testEnv.unauthenticatedContext().firestore();
       await assertFails(updateDoc(doc(unauth, 'settings', 'general'), { taxRate: 0 }));
+      await assertFails(updateDoc(doc(unauth, 'public_settings', 'general'), { taxRate: 0 }));
+    });
+
+    it('CANNOT arbitrarily create customer account without ecom_guest channel', async () => {
+      const unauth = testEnv.unauthenticatedContext().firestore();
+      await assertFails(setDoc(doc(unauth, 'customers', 'cust-arbitrary'), {
+        id: 'cust-arbitrary',
+        name: 'Arbitrary Anonymous',
+        email: 'anon@test.com'
+      }));
+    });
+
+    it('CAN create guest customer profile with explicit ecom_guest channel and 0 loyalty points', async () => {
+      const unauth = testEnv.unauthenticatedContext().firestore();
+      await assertSucceeds(setDoc(doc(unauth, 'customers', 'cust-guest-1'), {
+        id: 'cust-guest-1',
+        name: 'Guest Shopper',
+        email: 'guest@test.com',
+        channel: 'ecom_guest',
+        loyaltyPoints: 0
+      }));
+    });
+
+    it('CANNOT create guest customer profile with nonzero loyalty points (prevents point fraud)', async () => {
+      const unauth = testEnv.unauthenticatedContext().firestore();
+      await assertFails(setDoc(doc(unauth, 'customers', 'cust-guest-hacked'), {
+        id: 'cust-guest-hacked',
+        name: 'Guest Hacker',
+        email: 'hack@test.com',
+        channel: 'ecom_guest',
+        loyaltyPoints: 500
+      }));
+    });
+
+    it('CANNOT write or update public_products projection (reserved for staff)', async () => {
+      const unauth = testEnv.unauthenticatedContext().firestore();
+      await assertFails(setDoc(doc(unauth, 'public_products', 'prod-hacked'), {
+        id: 'prod-hacked',
+        name: 'Hacked Product',
+        sku: 'HACK',
+        price: 1,
+        stock: 1,
+        category: 'Test'
+      }));
     });
 
     it('CANNOT read or write shift reports', async () => {
@@ -283,6 +346,24 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       await assertFails(getDocs(collection(customer, 'customers')));
     });
 
+    it('CAN create their own customer profile with matching UID', async () => {
+      const customerNew = testEnv.authenticatedContext('cust-300', { email: 'charlie@example.com' }).firestore();
+      await assertSucceeds(setDoc(doc(customerNew, 'customers', 'cust-300'), {
+        id: 'cust-300',
+        name: 'Charlie Customer',
+        email: 'charlie@example.com'
+      }));
+    });
+
+    it('CANNOT create arbitrary customer profile with mismatched UID without ecom_guest', async () => {
+      const customer = testEnv.authenticatedContext('cust-100', { email: 'alice@example.com' }).firestore();
+      await assertFails(setDoc(doc(customer, 'customers', 'cust-999'), {
+        id: 'cust-999',
+        name: 'Spoofed Profile',
+        email: 'spoof@example.com'
+      }));
+    });
+
     it('CAN read and update their own customer profile', async () => {
       const customer = testEnv.authenticatedContext('cust-100', { email: 'alice@example.com' }).firestore();
       await assertSucceeds(getDoc(doc(customer, 'customers', 'cust-100')));
@@ -297,7 +378,17 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       await assertFails(updateDoc(doc(customer, 'customers', 'cust-200'), { name: 'Bob Hacked' }));
     });
 
-    it('CANNOT modify internal products or settings', async () => {
+    it('CANNOT read private settings (/settings/general)', async () => {
+      const customer = testEnv.authenticatedContext('cust-100', { email: 'alice@example.com' }).firestore();
+      await assertFails(getDoc(doc(customer, 'settings', 'general')));
+    });
+
+    it('CAN read public settings (/public_settings/general)', async () => {
+      const customer = testEnv.authenticatedContext('cust-100', { email: 'alice@example.com' }).firestore();
+      await assertSucceeds(getDoc(doc(customer, 'public_settings', 'general')));
+    });
+
+    it('CANNOT modify internal products or settings or public_settings', async () => {
       const customer = testEnv.authenticatedContext('cust-100', { email: 'alice@example.com' }).firestore();
       await assertFails(setDoc(doc(customer, 'products', 'new-prod'), {
         id: 'new-prod',
@@ -308,6 +399,7 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         category: 'Test'
       }));
       await assertFails(updateDoc(doc(customer, 'settings', 'general'), { taxRate: 0 }));
+      await assertFails(updateDoc(doc(customer, 'public_settings', 'general'), { taxRate: 0 }));
     });
 
     it('CANNOT modify or read audit logs', async () => {
@@ -508,6 +600,15 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       const admin = testEnv.authenticatedContext('staff-admin-1', { role: 'Super Admin', admin: true, isStaff: true }).firestore();
       await assertFails(deleteDoc(doc(admin, 'shift_reports', 'shift-100')));
     });
+
+    it('CANNOT read or write staff_credentials directly from client SDK (vault is closed to all clients)', async () => {
+      const admin = testEnv.authenticatedContext('staff-admin-1', { role: 'Super Admin', admin: true, isStaff: true }).firestore();
+      await assertFails(getDoc(doc(admin, 'staff_credentials', 'staff-cashier-1')));
+      await assertFails(setDoc(doc(admin, 'staff_credentials', 'staff-cashier-1'), {
+        staffId: 'staff-cashier-1',
+        hashedPin: 'argon2id$hacked'
+      }));
+    });
   });
 
   // ==========================================
@@ -548,6 +649,22 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         cost: 15.00, // VIOLATION: cost is forbidden on public projection!
         stock: 10,
         category: 'Test'
+      }));
+    });
+
+    it('Rejects injection of confidential supervisor PIN or secret into public_settings projection', async () => {
+      const storeMgr = testEnv.authenticatedContext('staff-mgr-1', { role: 'Store Manager', isStaff: true }).firestore();
+      await assertFails(setDoc(doc(storeMgr, 'public_settings', 'general'), {
+        businessName: 'Nexus Enterprise',
+        currency: 'SLE',
+        taxRate: 8.5,
+        supervisorPin: '1234' // VIOLATION: forbidden in public settings!
+      }));
+      await assertFails(setDoc(doc(storeMgr, 'public_settings', 'general'), {
+        businessName: 'Nexus Enterprise',
+        currency: 'SLE',
+        taxRate: 8.5,
+        secret: 'vault_secret' // VIOLATION: forbidden in public settings!
       }));
     });
 

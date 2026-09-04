@@ -101,3 +101,55 @@ This register records foundational architectural decisions for `greatjoy026/pos-
   * Attackers cannot forge "Paid" orders through client-side API manipulation.
   * Staff PINs and credential material are isolated from general staff profile reads.
 
+---
+
+### ADR-009: Separation of Private Settings and Public Storefront Settings Projection
+
+* **Status**: `IMPLEMENTED (SEC-001-R1)`
+* **Context**: The `/settings` collection contains sensitive operational configurations: supervisor PINs, integrations, webhook URLs, printer/network setups, and internal operational parameters. Allowing public reads of `/settings` leaks these confidential values.
+* **Decision**:
+  1. `/settings/{id}` is strictly restricted to authenticated enterprise staff (`isStaff()`).
+  2. `/public_settings/{id}` is created as a storefront-safe public projection (`allow read: if true;`).
+  3. Rules on `/public_settings` strictly forbid sensitive fields: `supervisorPin`, `pin`, `secret`, `secrets`, `apiKey`, `apiKeys`, `webhookUrl`, `webhookUrls`, `printerSettings`, `networkSettings`, `securitySettings`, `notificationSettings`, `operationalConfig`, `credentials`.
+  4. Client `subscribeSettings` falls back gracefully to `subscribePublicSettings` if the viewer lacks staff credentials.
+* **Consequences**: Public visitors and customers access essential storefront configurations (business name, currency, tax rate) without exposing internal infrastructure credentials.
+
+---
+
+### ADR-010: Constrained Guest E-Commerce Customer Creation Boundary
+
+* **Status**: `IMPLEMENTED (SEC-001-R2)`
+* **Context**: Open anonymous customer creation permitted arbitrary customer document writes and point injection.
+* **Decision**:
+  1. Unrestricted anonymous customer creation is eliminated.
+  2. Explicitly distinguish: (a) Staff CRM creation, (b) Authenticated customer self-registration (`request.auth.uid == customerId`), and (c) Guest checkout.
+  3. Guest customer creation requires explicit marker `channel == 'ecom_guest'` and locks loyalty points to `0`.
+  4. Cross-customer profile modification is strictly prohibited.
+* **Consequences**: E-commerce guests can check out smoothly while preventing loyalty balance fraud or unauthorized directory tampering.
+
+---
+
+### ADR-011: Complete Client Exclusion from Credential Vault
+
+* **Status**: `IMPLEMENTED (SEC-001-R4)`
+* **Context**: Permitting `isSuperAdmin()` client writes to `/staff_credentials` conflicts with the zero-client credential vault architecture.
+* **Decision**:
+  1. All client SDK operations on `/staff_credentials/{staffId}` are denied unconditionally: `allow read, write: if false;`.
+  2. The credential vault is exclusively accessible via trusted server environments (Firebase Admin SDK).
+  3. Plaintext PINs must not enter client storage or Firestore documents.
+* **Consequences**: Total client isolation for credential material, mitigating token-theft vector for credential compromise.
+
+---
+
+### ADR-012: Authoritative Staff Role Model & Custom Claims Precedence
+
+* **Status**: `IMPLEMENTED (SEC-001-R5)`
+* **Context**: Dual-authority ambiguity between Firebase Auth custom claims and the `/staff/{uid}` Firestore document.
+* **Decision**:
+  1. Firebase Auth Custom Claims (`request.auth.token.role`, `admin`, `permissions`) are the authoritative source of truth for Firestore security rule evaluations.
+  2. The `/staff/{uid}` document represents the persistent user profile for UI presentation.
+  3. In any conflict between custom claims and document data, custom claims take precedence.
+  4. Role updates must be processed via trusted server logic that synchronously updates custom claims and the staff document, followed by token revocation when privileges are reduced.
+* **Consequences**: Prevents client-side document tampering from escalating access rights. Full server-side synchronization engine tracked as follow-up task `SEC-002`.
+
+
