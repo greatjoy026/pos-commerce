@@ -1,19 +1,36 @@
 /**
- * Canonical Product Validation Engine (PROD-001)
+ * Canonical Product Validation Engine (PROD-001 / PROD-001-F1)
  *
  * Provides centralized, reusable domain validation rules for products,
  * variants, SKUs, and pricing.
+ *
+ * ARCHITECTURAL INVARIANT:
+ * CanonicalProduct and CanonicalVariant represent product/catalog identity ONLY.
+ * Validation of canonical entities does NOT require inventory stock or operational fields.
  */
 
-import { CanonicalProduct, CanonicalVariant, ProductValidationResult, ProductValidationError } from './types';
+import {
+  CanonicalProduct,
+  CanonicalVariant,
+  ProductValidationResult,
+  ProductValidationError,
+  ProductOperationalState
+} from './types';
 
+/**
+ * Validates the formatting of a SKU string.
+ * Must be alphanumeric with dashes, underscores, dots, and colons (length 2-100).
+ */
 export function validateSkuFormat(sku: string): boolean {
   if (!sku || typeof sku !== 'string') return false;
   const trimmed = sku.trim();
-  // Alphanumeric with dashes, underscores, dots, and colons. Length 2-100 chars.
   return trimmed.length >= 2 && trimmed.length <= 100 && /^[A-Za-z0-9_.:-]+$/.test(trimmed);
 }
 
+/**
+ * Validates an authoritative CanonicalVariant.
+ * Does NOT require or inspect inventory stock (INV-001 separation).
+ */
 export function validateVariant(
   variant: CanonicalVariant,
   parentSku?: string
@@ -41,17 +58,19 @@ export function validateVariant(
     errors.push({ field: 'variant.pricing.costPrice', message: 'Variant cost price cannot be negative.' });
   }
 
-  if (typeof variant.stock !== 'number' || isNaN(variant.stock) || variant.stock < 0) {
-    errors.push({ field: 'variant.stock', message: 'Variant stock cannot be negative.' });
-  }
-
   return {
     isValid: errors.length === 0,
     errors
   };
 }
 
-export function validateCanonicalProduct(product: Partial<CanonicalProduct> & { id?: string; name?: string; price?: number }): ProductValidationResult {
+/**
+ * Validates an authoritative CanonicalProduct entity.
+ * Checks identity, merchandising, classification, SKU format, and variant consistency.
+ */
+export function validateCanonicalProduct(
+  product: Partial<CanonicalProduct> & { id?: string; name?: string; price?: number }
+): ProductValidationResult {
   const errors: ProductValidationError[] = [];
 
   // 1. Identity Validation
@@ -76,7 +95,7 @@ export function validateCanonicalProduct(product: Partial<CanonicalProduct> & { 
     errors.push({ field: 'category', message: 'Category name cannot exceed 100 characters.' });
   }
 
-  // 4. SKU Validation
+  // 4. Base SKU Validation
   const sku = product.sku?.trim();
   if (!sku) {
     errors.push({ field: 'sku', message: 'Base product SKU is required.' });
@@ -88,28 +107,12 @@ export function validateCanonicalProduct(product: Partial<CanonicalProduct> & { 
   }
 
   // 5. Pricing Validation
-  const retailPrice = product.operational?.cost !== undefined && product.merchandising === undefined
-    ? (product as any).price
-    : product.variants?.[0]?.pricing.retailPrice ?? (product as any).price;
-
+  const retailPrice = product.variants?.[0]?.pricing?.retailPrice ?? (product as any).price;
   if (retailPrice === undefined || typeof retailPrice !== 'number' || isNaN(retailPrice) || retailPrice < 0) {
     errors.push({ field: 'price', message: 'Product retail price must be a non-negative number.' });
   }
 
-  // 6. Operational Validation
-  if (product.operational) {
-    if (typeof product.operational.cost === 'number' && product.operational.cost < 0) {
-      errors.push({ field: 'operational.cost', message: 'Cost price cannot be negative.' });
-    }
-    if (typeof product.operational.stock === 'number' && product.operational.stock < 0) {
-      errors.push({ field: 'operational.stock', message: 'Stock level cannot be negative.' });
-    }
-    if (typeof product.operational.reorderPoint === 'number' && product.operational.reorderPoint < 0) {
-      errors.push({ field: 'operational.reorderPoint', message: 'Reorder point cannot be negative.' });
-    }
-  }
-
-  // 7. Lifecycle Validation
+  // 6. Lifecycle Validation
   if (product.lifecycle?.status) {
     const validStatuses = ['Active', 'Draft', 'Archived'];
     if (!validStatuses.includes(product.lifecycle.status)) {
@@ -120,7 +123,7 @@ export function validateCanonicalProduct(product: Partial<CanonicalProduct> & { 
     }
   }
 
-  // 8. Variant Consistency & SKU Uniqueness
+  // 7. Variant Consistency & SKU Uniqueness
   if (product.variants && Array.isArray(product.variants)) {
     const seenSkus = new Set<string>();
     if (sku) seenSkus.add(sku.toLowerCase());
@@ -138,9 +141,8 @@ export function validateCanonicalProduct(product: Partial<CanonicalProduct> & { 
 
       if (v.sku) {
         const lowerSku = v.sku.toLowerCase();
-        // If there's more than 1 variant or variant SKU matches another variant
         if (seenSkus.has(lowerSku)) {
-          // If only 1 variant and it has the same SKU as the parent base SKU, that's the default single-item variant
+          // Single default variant sharing the parent base SKU is allowed
           if (!(product.variants!.length === 1 && lowerSku === sku?.toLowerCase())) {
             errors.push({
               field: `variants[${index}].sku`,
@@ -152,6 +154,48 @@ export function validateCanonicalProduct(product: Partial<CanonicalProduct> & { 
         }
       }
     });
+  }
+
+  // 8. Packaging Unit SKU Uniqueness
+  if (product.packagingUnits && Array.isArray(product.packagingUnits)) {
+    const seenPkgSkus = new Set<string>();
+    product.packagingUnits.forEach((u, index) => {
+      if (u.sku) {
+        const lowerSku = u.sku.toLowerCase();
+        if (seenPkgSkus.has(lowerSku)) {
+          errors.push({
+            field: `packagingUnits[${index}].sku`,
+            message: `Duplicate packaging SKU detected: "${u.sku}".`
+          });
+        }
+        seenPkgSkus.add(lowerSku);
+      }
+    });
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
+}
+
+/**
+ * Transitional Validator for Legacy Operational State
+ * Used in legacy form validation until INV-001 decouples inventory management.
+ */
+export function validateOperationalState(
+  op: Partial<ProductOperationalState>
+): ProductValidationResult {
+  const errors: ProductValidationError[] = [];
+
+  if (typeof op.cost === 'number' && op.cost < 0) {
+    errors.push({ field: 'cost', message: 'Cost price cannot be negative.' });
+  }
+  if (typeof op.stock === 'number' && op.stock < 0) {
+    errors.push({ field: 'stock', message: 'Stock level cannot be negative.' });
+  }
+  if (typeof op.reorderPoint === 'number' && op.reorderPoint < 0) {
+    errors.push({ field: 'reorderPoint', message: 'Reorder point cannot be negative.' });
   }
 
   return {

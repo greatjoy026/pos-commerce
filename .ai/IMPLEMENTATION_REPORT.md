@@ -518,6 +518,123 @@ Enforces SEC-001-R3 and SEC-005:
 3. **`SEC-005 — Trusted Server-Side Catalog Projection`**: Cloud Function / server-side trigger to project `/products` to `/public_products` independently of client writes.
 
 
-**Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
+**Status**: `SUPERSEDED BY PROD-001-F1`
+
+---
+
+# Section 7: PROD-001-F1 Correction Implementation Report
+
+**Task ID**: `PROD-001-F1`  
+**Task Name**: Product Domain Boundary & SKU Architecture Correction  
+**Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`  
+**Author**: Gemini (Senior Software Engineer & Implementation Lead)  
+**Date**: 2026-09-05  
+
+## 1. Supervisor Findings Addressed
+
+During the technical review of `PROD-001`, the technical supervisor identified key architectural defects:
+1. **Inventory State Contamination in Domain Aggregate**: Operational inventory fields (`stock`, `cost`, `location`, `reorderPoint`, `serialNumbers`, `batchNumber`) were still embedded within product entities, blurring the boundary with `INV-001`.
+2. **Silent Fallback Anti-Pattern**: The normalization engine was generating silent placeholder SKUs and names when input was missing or corrupted, concealing data errors rather than rejecting them.
+3. **Missing Strict Isolation Adapters**: Lack of a clear separation between canonical catalog models and transitional operational state required by existing UI components.
+4. **Packaging Unit Multiplier Domain Coupling**: Packaging unit definitions were entangled with stock calculation heuristics rather than pure UOM multipliers.
+
+## 2. Technical Architecture & Corrective Implementation
+
+### 2.1 Canonical Product Aggregate & Inventory Isolation
+In `/src/domain/product/types.ts`:
+* **`CanonicalProduct`** now encapsulates strictly catalog identity and merchandising concerns:
+  * `merchandising`: Name, description, brand, model, media URLs, tags, specifications.
+  * `classification`: Category, subcategory, tax classification, tax-exempt flag.
+  * `lifecycle`: Status (`Draft`, `Active`, `Archived`), timestamps, channel visibility (`publishOnline`, `sellOnPOS`, `sellOnline`).
+  * `variants`: Array of 1..N `CanonicalVariant` instances with physical option attributes, variant SKUs, barcodes, dimensions, weight, and pricing (`retailPrice`, `costPrice`, `wholesalePrice`).
+  * `packagingUnits`: Array of `PackagingUnitInfo` containing base unit identifiers and numeric conversion multipliers (`multiplier: number`).
+  * **Strict Negative Invariant**: `stock`, `cost`, `location`, `reorderPoint`, `serialNumbers`, and `batchNumber` are **strictly prohibited** from `CanonicalProduct`.
+* **`ProductOperationalState`**: Explicitly separated interface containing transitional operational fields (`stock`, `cost`, `location`, `reorderPoint`, `trackingMode`, `stockRotationMethod`, `serialNumbers`, `batchNumber`, `expiryDate`, `unit`). Reserved for transitional adapters pending `INV-001`.
+
+### 2.2 Strict Normalization & Anti-Silent Fallback Rule
+In `/src/domain/product/normalization.ts`:
+* **`tryNormalizeProduct(raw: unknown)`**: Validates untrusted inputs and returns either `{ success: true, product: CanonicalProduct }` or `{ success: false, errors: ProductValidationError[] }`.
+* **`normalizeProduct(raw: unknown)`**: Throws a descriptive `ProductNormalizationError` with structured validation errors when input is invalid.
+* **Anti-Silent Fallback Enforcement**:
+  * Missing or blank base SKU -> Throws validation error.
+  * Missing or blank name -> Throws validation error.
+  * Duplicate variant SKUs within the same product -> Throws validation error.
+  * Non-positive packaging unit multiplier (`multiplier <= 0`) -> Throws validation error.
+  * Negative retail price (`retailPrice < 0`) -> Throws validation error.
+* **Single-SKU Normalization**: If a product has no explicit variant array, the normalizer creates exactly 1 default variant (`isDefault: true`, inheriting the base SKU and price).
+
+### 2.3 Transitional Compatibility Layer
+In `/src/domain/product/normalization.ts`:
+* **`toLegacyProduct(canonical, legacyOperational?)`**: Combines a pure `CanonicalProduct` with transitional operational state (`ProductOperationalState`) to return `Product & { canonical: CanonicalProduct }`. This preserves complete backward compatibility for legacy UI components (`App.tsx`, `InventoryModule`, `ReportsModule`) without contaminating the domain core.
+* **`normalizeToLegacyProduct(raw: unknown)`**: End-to-end pipeline that normalizes untrusted inputs into canonical products and wraps them with legacy properties for seamless runtime operation.
+
+### 2.4 Authoritative SKU Resolution & Catalog Uniqueness
+In `/src/domain/product/skuService.ts`:
+* **`resolveProductSku(query, catalog)`**: Authoritatively resolves a scanned barcode or searched SKU against:
+  1. Base product SKU
+  2. Base product barcode
+  3. Variant SKU (resolves variant attributes and pricing)
+  4. Variant barcode
+  5. Packaging unit barcode / SKU (resolves packaging multiplier and selling price)
+* **`validateSkuUniqueness(newSkus, catalog, currentProductId?)`**: Enforces catalog-wide uniqueness across base SKUs, variant SKUs, and packaging SKUs (case-insensitive, ignoring self during edits).
+* **`validateBarcodeUniqueness(newBarcodes, catalog, currentProductId?)`**: Enforces catalog-wide barcode uniqueness.
+* **`generateCanonicalSku(prefix, attributes)`**: Generates standardized uppercase alphanumeric SKUs.
+
+### 2.5 Catalog Projections & Security Boundary
+In `/src/domain/catalog/projections.ts` and `/src/domain/product/projections.ts`:
+* **`toPublicCatalogProjection(product)`**: Enforces the SEC-001 / SEC-005 security boundary. Strips all sensitive internal data (`cost`, `costPrice`, `wholesalePrice`, `supplier`, `vendor`, `reorderPoint`, `serialNumbers`, `batchNumber`).
+* **`toPOSProductView(canonical, operational)`**: Supplies POS terminals with a strongly typed product view preserving required cart fields (`id`, `name`, `sku`, `price`, `cost`, `stock`, `variants`, `category`).
+
+## 3. Verification & Test Suite
+
+| Test Suite | Target File | Test Count | Pass / Fail |
+|---|---|---|---|
+| **Product Domain Boundary & SKU Architecture** | `tests/product-domain.test.ts` | **22 / 22** | **PASS (0 fail)** |
+| **Firestore Authorization & Security Rules** | `tests/authorization.test.ts` | **79 / 79** | **PASS (0 fail)** |
+| **Total Automated Regression Suite** | `npm test` | **101 / 101** | **PASS (0 fail)** |
+| **Static Type Checking** | `npm run lint` (`tsc --noEmit`) | Clean | **PASS (0 errors)** |
+| **Production Application Build** | `npm run build` (`vite build`) | Clean | **PASS (0 errors)** |
+
+### Detailed Domain Test Coverage (22 Tests)
+1. **Canonical Product Normalization & Inventory Isolation** (3 tests):
+   - Single-SKU normalization with 1 default variant and zero inventory state in domain aggregate.
+   - Multi-variant normalization with unique variant SKUs and no variant stock.
+   - Packaging unit normalization without inventory calculations.
+2. **Strict Normalization Validation (Anti-Silent Fallback Rule)** (3 tests):
+   - Rejection of missing SKU without inventing silent placeholders.
+   - Rejection of missing name without inventing silent placeholders.
+   - Rejection of duplicate variant SKUs within the same product.
+3. **Legacy Compatibility Adapters** (2 tests):
+   - `toLegacyProduct` bridges `CanonicalProduct` with transitional operational state for existing UI.
+   - `normalizeToLegacyProduct` executes complete validation and attaches canonical reference.
+4. **Authoritative SKU Resolution & Extraction Engine** (7 tests):
+   - Resolution by base SKU string.
+   - Resolution by base barcode.
+   - Resolution by variant SKU with attributes.
+   - Resolution by variant barcode.
+   - Resolution by packaging unit barcode with multiplier.
+   - Extraction of all product SKUs across base, variant, and packaging.
+   - Rejection of uncataloged barcodes/SKUs.
+5. **Product Validation Rules & SKU Constraints** (2 tests):
+   - Validation of SKU string format.
+   - Validation of canonical product structure without requiring inventory fields.
+6. **Catalog-Wide SKU & Barcode Uniqueness Engine** (3 tests):
+   - Validation of SKU uniqueness across catalog.
+   - Validation of barcode uniqueness across catalog.
+   - Canonical SKU generation format.
+7. **Public Catalog Projection Security Boundary** (1 test):
+   - Strict omission of wholesale costs, suppliers, serials, batch numbers, and reorder points.
+8. **POS View Adapter** (1 test):
+   - Production of compliant POS product view preserving cart requirements.
+
+## 4. Scope Discipline & Separation of Concerns
+
+* **Strict Boundary with INV-001**: In accordance with the supervisor directive, physical inventory balances, stock movements, FIFO/FEFO ledgers, and multi-location allocations remain untouched pending `INV-001`.
+* **Transitional Adapters**: Legacy UI components continue functioning seamlessly with no broken contracts.
+* **Production Deployment Status**: Standard application build verified. Production rules deployment held pending supervisor review (Status: NO).
+
+---
+
+**PROD-001-F1 CORRECTION COMPLETE — AWAITING ARCHITECTURAL REVIEW**
 
 

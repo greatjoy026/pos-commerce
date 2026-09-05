@@ -1,5 +1,5 @@
-import type { CanonicalProduct, CanonicalVariant, ProductSku } from './domain/product/types';
-export type { CanonicalProduct, CanonicalVariant, ProductSku };
+import type { CanonicalProduct, CanonicalVariant, ProductSku, PackagingUnitInfo, LegacyProductInput } from './domain/product/types';
+export type { CanonicalProduct, CanonicalVariant, ProductSku, PackagingUnitInfo, LegacyProductInput };
 
 export type StaffRole = 
   | 'Super Admin'
@@ -332,7 +332,7 @@ export interface Product {
   cost: number;
   stock: number;
   category: string;
-  location: 'Warehouse' | 'Store Shelf' | 'Fulfillment Center';
+  location: 'Warehouse' | 'Store Shelf' | 'Fulfillment Center' | string;
   reorderPoint: number;
   barcode: string;
   qrCode: string;
@@ -405,6 +405,11 @@ export interface PublicProductProjection {
   sku: string;
   price: number;
   stock: number;
+  availability?: {
+    inStock: boolean;
+    status: 'IN_STOCK' | 'OUT_OF_STOCK' | 'LOW_STOCK';
+    stock?: number;
+  };
   category: string;
   imageUrl?: string;
   description?: string;

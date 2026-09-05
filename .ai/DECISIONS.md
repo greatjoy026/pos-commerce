@@ -170,5 +170,24 @@ This register records foundational architectural decisions for `greatjoy026/pos-
   6. Operational inventory ledger decoupling is cleanly isolated for `INV-001`.
 * **Consequences**: Both POS and E-Commerce consume the same authoritative catalog model. Zero logic duplication for SKU/barcode resolution. Backwards compatibility preserved without breaking running components or existing Firestore schemas.
 
+---
+
+### ADR-014: Strict Product Catalog Domain Boundary, Anti-Silent Fallbacks, and Inventory Isolation (PROD-001-F1)
+
+* **Status**: `IMPLEMENTED (PROD-001-F1)`
+* **Context**: Technical supervisor review of `PROD-001` identified architectural contamination where operational inventory state (stock counts, wholesale costs, reorder thresholds, physical warehouse locations, serial numbers, and batch lot numbers) remained embedded in product representations. Additionally, legacy normalization layers silently fabricated placeholder SKUs, names, or zero-values when given defective input, masking critical data corruption.
+* **Decision**:
+  1. **Strict Product Domain Isolation**: `CanonicalProduct` contains exclusively product/catalog identity, merchandising, classification, lifecycle, variants, and packaging unit conversions. All operational inventory concerns (`stock`, `cost`, `location`, `reorderPoint`, `serialNumbers`, `batchNumber`) are strictly banned from `CanonicalProduct`.
+  2. **Anti-Silent Fallback Invariant**: Normalization pipelines (`normalizeProduct`, `tryNormalizeProduct`) strictly reject missing base SKUs, missing names, duplicate variant SKUs within a product aggregate, negative prices, and non-positive packaging multipliers with explicit `ProductNormalizationError` / `ProductValidationError[]`. They must never fabricate silent defaults like `SKU-FALLBACK` or random IDs for missing identity data.
+  3. **Transitional Compatibility Adapters**:
+     - `toLegacyProduct(canonical, operationalState)` and `normalizeToLegacyProduct(raw)` bridge `CanonicalProduct` with transitional `ProductOperationalState` for existing UI views (`Product & { canonical: CanonicalProduct }`), preventing runtime contract breakage while keeping the domain core pristine.
+     - `toPOSProductView(canonical, operationalState)` in `/src/domain/catalog/projections.ts` provides clean, typed consumption for POS terminals.
+  4. **Strict Scope Boundary with INV-001**: Physical inventory ledgers, multi-location stock allocations, lot tracking, and stock movement records are strictly reserved for `INV-001`.
+* **Consequences**:
+  - The catalog aggregate is unpolluted by mutable operational state.
+  - Data corruption and untyped inputs are caught early at the boundary with structured error feedback.
+  - Existing UI components continue running seamlessly via transitional adapters.
+
+
 
 

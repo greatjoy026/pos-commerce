@@ -1,78 +1,119 @@
 /**
- * Canonical Product Normalization Engine (PROD-001)
+ * Canonical Product Normalization Engine (PROD-001 / PROD-001-F1)
  *
- * Provides bidirectional normalization between legacy/Firestore documents and
- * the Canonical Product domain representation.
+ * Provides authoritative normalization between untrusted/legacy inputs and the
+ * Canonical Product domain representation.
  *
- * Solves:
- * - Single-SKU vs. Multi-Variant normalization
- * - Packaging & Multi-UOM consolidation
- * - Legacy field mapping without destructive changes
+ * Architectural Invariants:
+ * 1. Strict Normalization: NEVER silently invent business identifiers (e.g. `SKU-${id}`)
+ *    or fallback names (e.g. `'Unnamed Product'`). Missing identifiers MUST produce validation errors.
+ * 2. Canonical Isolation: CanonicalProduct represents catalog identity only. Operational inventory
+ *    fields (stock, cost, location) are isolated in compatibility adapters (`toLegacyProduct`).
+ * 3. Variant Boundary: CanonicalVariant does not contain stock quantities.
+ * 4. Explicit Typing: Replaces unchecked `any` casts with structured `LegacyProductInput` and type guards.
  */
 
 import {
   CanonicalProduct,
   CanonicalVariant,
+  PackagingUnitInfo,
   ProductClassification,
   ProductLifecycle,
   ProductMerchandising,
-  ProductOperationalState
+  ProductOperationalState,
+  ProductValidationError,
+  LegacyProductInput,
+  LegacyVariantInput,
+  LegacyPackagingUnitInput
 } from './types';
 import { Product, ProductVariant, PackagingUnit } from '../../types';
 
 /**
- * Normalizes any legacy or Firestore product record into a unified CanonicalProduct
- * while preserving full backward compatibility with the legacy `Product` interface.
+ * Structured Normalization Error
  */
-export function normalizeProduct(raw: any): Product & { canonical: CanonicalProduct } {
-  if (!raw || typeof raw !== 'object') {
-    throw new Error('Cannot normalize non-object product data');
+export class ProductNormalizationError extends Error {
+  public readonly errors: ProductValidationError[];
+
+  constructor(errors: ProductValidationError[]) {
+    const errorDetails = errors.map(e => `[${e.field}] ${e.message}`).join('; ');
+    super(`Product normalization failed: ${errorDetails}`);
+    this.name = 'ProductNormalizationError';
+    this.errors = errors;
+  }
+}
+
+/**
+ * Type guard for legacy or untrusted product input
+ */
+export function isLegacyProductInput(data: unknown): data is LegacyProductInput {
+  return typeof data === 'object' && data !== null;
+}
+
+export type TryNormalizeResult =
+  | { success: true; product: CanonicalProduct }
+  | { success: false; errors: ProductValidationError[] };
+
+/**
+ * Validates untrusted input and produces a CanonicalProduct, or returns structured errors.
+ * Never silently fabricates missing SKUs or names.
+ */
+export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
+  if (!isLegacyProductInput(raw)) {
+    return {
+      success: false,
+      errors: [{ field: 'root', message: 'Product input must be a non-null object.' }]
+    };
   }
 
-  const id = String(raw.id || '').trim();
-  const sku = String(raw.sku || '').trim() || `SKU-${id}`;
-  const name = String(raw.name || raw.merchandising?.name || 'Unnamed Product').trim();
-  const price = typeof raw.price === 'number' && !isNaN(raw.price) && raw.price >= 0
-    ? raw.price
-    : (raw.variants?.[0]?.pricing?.retailPrice ?? raw.variants?.[0]?.retailPrice ?? 0);
-  const cost = typeof raw.cost === 'number' && !isNaN(raw.cost) && raw.cost >= 0
-    ? raw.cost
-    : (raw.variants?.[0]?.pricing?.costPrice ?? raw.variants?.[0]?.costPrice ?? 0);
-  const stock = typeof raw.stock === 'number' && !isNaN(raw.stock) && raw.stock >= 0
-    ? raw.stock
-    : (raw.variants?.reduce((sum: number, v: any) => sum + (Number(v.stock) || 0), 0) ?? 0);
-  const category = String(raw.category || raw.classification?.category || 'General').trim();
+  const errors: ProductValidationError[] = [];
+
+  // 1. Mandatory Identity Fields
+  const rawId = raw.id ? String(raw.id).trim() : '';
+  if (!rawId) {
+    errors.push({ field: 'id', message: 'Product ID is required.' });
+  }
+
+  const rawSku = raw.sku ? String(raw.sku).trim() : '';
+  if (!rawSku) {
+    errors.push({ field: 'sku', message: 'Product SKU is required and cannot be silently generated.' });
+  }
+
+  const rawName = (raw.merchandising?.name || raw.name || '').trim();
+  if (!rawName) {
+    errors.push({ field: 'name', message: 'Product name is required and cannot be silently defaulted.' });
+  }
+
   const barcode = raw.barcode ? String(raw.barcode).trim() : undefined;
   const qrCode = raw.qrCode ? String(raw.qrCode).trim() : undefined;
 
-  // 1. Merchandising
+  // 2. Merchandising
   const merchandising: ProductMerchandising = {
-    name,
+    name: rawName,
     description: String(raw.description || raw.merchandising?.description || ''),
     brand: raw.brand || raw.merchandising?.brand || undefined,
     model: raw.model || raw.merchandising?.model || undefined,
     imageUrl: raw.imageUrl || raw.merchandising?.imageUrl || raw.images?.[0] || undefined,
     images: Array.isArray(raw.images) ? raw.images : (raw.imageUrl ? [raw.imageUrl] : []),
-    rating: typeof raw.rating === 'number' ? raw.rating : 5.0,
-    reviewCount: typeof raw.reviewCount === 'number' ? raw.reviewCount : 0,
+    rating: typeof raw.rating === 'number' ? raw.rating : (raw.merchandising?.rating ?? 5.0),
+    reviewCount: typeof raw.reviewCount === 'number' ? raw.reviewCount : (raw.merchandising?.reviewCount ?? 0),
     specifications: raw.specifications || raw.merchandising?.specifications || {},
     isFeatured: Boolean(raw.isFeatured ?? raw.merchandising?.isFeatured),
     isNewArrival: Boolean(raw.isNewArrival ?? raw.merchandising?.isNewArrival),
     isBestSeller: Boolean(raw.isBestSeller ?? raw.merchandising?.isBestSeller),
-    originalPrice: typeof raw.originalPrice === 'number' ? raw.originalPrice : undefined,
-    discountPercent: typeof raw.discountPercent === 'number' ? raw.discountPercent : undefined
+    originalPrice: typeof raw.originalPrice === 'number' ? raw.originalPrice : raw.merchandising?.originalPrice,
+    discountPercent: typeof raw.discountPercent === 'number' ? raw.discountPercent : raw.merchandising?.discountPercent
   };
 
-  // 2. Classification
+  // 3. Classification
   const classification: ProductClassification = {
-    category,
+    category: String(raw.category || raw.classification?.category || 'General').trim(),
     productType: raw.productType || raw.classification?.productType || 'Standard',
-    tags: Array.isArray(raw.tags) ? raw.tags : [],
+    tags: Array.isArray(raw.tags) ? raw.tags : (raw.classification?.tags || []),
     taxCategory: raw.taxCategory || raw.classification?.taxCategory,
     isTaxExempt: Boolean(raw.isTaxExempt || raw.classification?.isTaxExempt)
   };
 
-  // 3. Lifecycle
+  // 4. Lifecycle
   const lifecycle: ProductLifecycle = {
     status: raw.status || raw.lifecycle?.status || 'Active',
     visibility: {
@@ -83,32 +124,56 @@ export function normalizeProduct(raw: any): Product & { canonical: CanonicalProd
     returnable: raw.returnable !== false,
     shippingEnabled: raw.shippingEnabled !== false,
     storePickup: raw.storePickup !== false,
-    createdAt: raw.createdAt,
-    updatedAt: raw.updatedAt
+    createdAt: raw.createdAt || raw.lifecycle?.createdAt,
+    updatedAt: raw.updatedAt || raw.lifecycle?.updatedAt
   };
 
-  // 4. Variants Normalization
-  const canonicalVariants: CanonicalVariant[] = [];
-  const legacyVariants: ProductVariant[] = [];
+  // 5. Pricing Base
+  const basePrice = typeof raw.price === 'number' && !isNaN(raw.price) && raw.price >= 0
+    ? raw.price
+    : (raw.variants?.[0]?.pricing?.retailPrice ?? raw.variants?.[0]?.retailPrice ?? 0);
 
-  if (Array.isArray(raw.variants) && raw.variants.length > 0) {
-    raw.variants.forEach((v: any, index: number) => {
-      const vSku = String(v.sku || `${sku}-${index + 1}`).trim();
+  // 6. Variants Normalization (Strict variant SKU validation, NO stock in canonical variant)
+  const canonicalVariants: CanonicalVariant[] = [];
+  const rawVariants = Array.isArray(raw.variants) ? raw.variants : [];
+
+  if (rawVariants.length > 0) {
+    const seenVariantSkus = new Set<string>();
+
+    rawVariants.forEach((v: LegacyVariantInput, index: number) => {
+      const vSku = v.sku ? String(v.sku).trim() : '';
+      if (!vSku) {
+        errors.push({
+          field: `variants[${index}].sku`,
+          message: `Variant at index ${index} is missing a required SKU.`
+        });
+        return;
+      }
+
+      const lowerSku = vSku.toLowerCase();
+      if (seenVariantSkus.has(lowerSku)) {
+        errors.push({
+          field: `variants[${index}].sku`,
+          message: `Duplicate variant SKU "${vSku}" detected within the same product.`
+        });
+      }
+      seenVariantSkus.add(lowerSku);
+
       const vRetailPrice = typeof v.pricing?.retailPrice === 'number'
         ? v.pricing.retailPrice
-        : (typeof v.retailPrice === 'number' ? v.retailPrice : price);
+        : (typeof v.retailPrice === 'number' ? v.retailPrice : basePrice);
+
       const vCostPrice = typeof v.pricing?.costPrice === 'number'
         ? v.pricing.costPrice
-        : (typeof v.costPrice === 'number' ? v.costPrice : cost);
-      const vStock = typeof v.stock === 'number' && !isNaN(v.stock) ? v.stock : 0;
+        : (typeof v.costPrice === 'number' ? v.costPrice : undefined);
 
       const variantName = v.name || [v.size, v.color, v.model].filter(Boolean).join(' / ') || `Variant ${index + 1}`;
 
       const canonicalVar: CanonicalVariant = {
-        id: v.id || `${id}-var-${vSku}`,
-        productId: id,
+        id: v.id || `${rawId}-var-${vSku}`,
+        productId: rawId,
         sku: vSku,
-        barcode: v.barcode,
+        barcode: v.barcode ? String(v.barcode).trim() : undefined,
         name: variantName,
         attributes: v.attributes || {
           ...(v.size ? { size: v.size } : {}),
@@ -119,46 +184,27 @@ export function normalizeProduct(raw: any): Product & { canonical: CanonicalProd
           retailPrice: vRetailPrice,
           costPrice: vCostPrice,
           wholesalePrice: v.wholesalePrice,
-          minimumPrice: v.minimumPrice
+          minimumPrice: v.pricing?.minimumPrice
         },
-        stock: vStock,
         isActive: v.isActive !== false,
         imageUrl: v.imageUrl,
         isDefault: index === 0
       };
 
       canonicalVariants.push(canonicalVar);
-
-      // Legacy variant structure for backwards compatibility
-      legacyVariants.push({
-        sku: vSku,
-        size: v.size || canonicalVar.attributes.size,
-        color: v.color || canonicalVar.attributes.color,
-        model: v.model || canonicalVar.attributes.model,
-        optionName: v.optionName || variantName,
-        stock: vStock,
-        costPrice: vCostPrice,
-        retailPrice: vRetailPrice,
-        wholesalePrice: v.wholesalePrice,
-        barcode: v.barcode,
-        imageUrl: v.imageUrl,
-        isActive: v.isActive !== false
-      });
     });
   } else {
-    // Single-SKU product: normalize into one default canonical variant
+    // Single-SKU product: normalize into exactly one default canonical variant matching base product
     const defaultVar: CanonicalVariant = {
-      id: `${id}-var-default`,
-      productId: id,
-      sku,
+      id: `${rawId}-var-default`,
+      productId: rawId,
+      sku: rawSku,
       barcode,
-      name: 'Standard Unit',
+      name: rawName,
       attributes: {},
       pricing: {
-        retailPrice: price,
-        costPrice: cost
+        retailPrice: basePrice
       },
-      stock,
       isActive: true,
       imageUrl: merchandising.imageUrl,
       isDefault: true
@@ -166,106 +212,197 @@ export function normalizeProduct(raw: any): Product & { canonical: CanonicalProd
     canonicalVariants.push(defaultVar);
   }
 
-  // 5. Operational State
-  const operational: ProductOperationalState = {
-    stock,
-    cost,
-    location: raw.location || raw.operational?.location || 'Store Shelf',
-    reorderPoint: typeof raw.reorderPoint === 'number' ? raw.reorderPoint : 0,
-    trackingMode: raw.inventoryTracking || raw.trackingMode || (raw.trackSerial ? 'SERIAL' : raw.trackBatch ? 'BATCH' : 'QUANTITY'),
-    stockRotationMethod: raw.stockRotationMethod || 'FIFO',
-    serialNumbers: raw.serialNumbers || (raw.serialNumber ? [raw.serialNumber] : undefined),
-    batchNumber: raw.batchNumber || raw.batchLot,
-    expiryDate: raw.expiryDate,
-    unit: raw.unit || raw.operational?.unit || 'Piece'
-  };
+  // 7. Packaging Units Consolidation (Catalog definition only, no inventory logic)
+  const packagingUnits: PackagingUnitInfo[] = [];
 
-  // 6. Packaging Units Consolidation
-  const packagingUnits: PackagingUnit[] = [];
   if (Array.isArray(raw.packagingUnits)) {
-    packagingUnits.push(...raw.packagingUnits);
+    raw.packagingUnits.forEach((u: LegacyPackagingUnitInput) => {
+      if (u.unitName) {
+        packagingUnits.push({
+          id: u.id || `pkg-${u.unitName.toLowerCase().replace(/\s+/g, '-')}`,
+          unitName: u.unitName,
+          multiplier: typeof u.multiplier === 'number' && u.multiplier > 0 ? u.multiplier : 1,
+          baseUnit: u.base_unit || u.baseUnit || 'Piece',
+          sellingPrice: typeof u.sellingPrice === 'number' ? u.sellingPrice : basePrice,
+          barcode: u.barcode ? String(u.barcode).trim() : undefined,
+          sku: u.sku ? String(u.sku).trim() : undefined,
+          isDefaultSellingUnit: Boolean(u.isDefaultSellingUnit),
+          isPackUnit: Boolean(u.isPackUnit ?? (u.multiplier && u.multiplier > 1))
+        });
+      }
+    });
   } else if (raw.packaging?.sellingTiers && Array.isArray(raw.packaging.sellingTiers)) {
-    raw.packaging.sellingTiers.forEach((tier: any) => {
-      packagingUnits.push({
-        id: tier.id || `tier-${tier.unitQuantity}`,
-        unitName: tier.name,
-        multiplier: tier.unitQuantity || 1,
-        base_unit: raw.packaging?.baseSellingUnitName || 'Piece',
-        barcode: tier.barcode,
-        sellingPrice: tier.sellingPrice,
-        isDefaultSellingUnit: Boolean(tier.isDefaultSellingUnit),
-        isPackUnit: tier.unitQuantity > 1,
-        sellingMode: tier.unitQuantity > 1 ? 'pack_selling' : 'retail_unit'
-      });
+    raw.packaging.sellingTiers.forEach((tier) => {
+      if (tier.name) {
+        packagingUnits.push({
+          id: tier.id || `tier-${tier.unitQuantity}`,
+          unitName: tier.name,
+          multiplier: tier.unitQuantity && tier.unitQuantity > 0 ? tier.unitQuantity : 1,
+          baseUnit: raw.packaging?.baseSellingUnitName || 'Piece',
+          barcode: tier.barcode ? String(tier.barcode).trim() : undefined,
+          sku: tier.sku ? String(tier.sku).trim() : undefined,
+          sellingPrice: typeof tier.sellingPrice === 'number' ? tier.sellingPrice : basePrice,
+          isDefaultSellingUnit: Boolean(tier.isDefaultSellingUnit),
+          isPackUnit: (tier.unitQuantity ?? 1) > 1
+        });
+      }
     });
   }
 
-  // Build CanonicalProduct aggregate
+  if (errors.length > 0) {
+    return { success: false, errors };
+  }
+
   const canonical: CanonicalProduct = {
-    id,
-    sku,
+    id: rawId,
+    sku: rawSku,
     barcode,
     qrCode,
     merchandising,
     classification,
     lifecycle,
     variants: canonicalVariants,
-    operational,
-    packagingUnits: packagingUnits.length > 0 ? packagingUnits.map(u => ({
-      id: u.id,
-      unitName: u.unitName,
-      multiplier: u.multiplier,
-      baseUnit: u.base_unit,
-      sellingPrice: u.sellingPrice,
-      barcode: u.barcode,
-      sku: u.sku,
-      isDefaultSellingUnit: u.isDefaultSellingUnit,
-      isPackUnit: u.isPackUnit
-    })) : undefined
+    packagingUnits: packagingUnits.length > 0 ? packagingUnits : undefined
   };
 
-  // Return hybrid satisfying both Product and { canonical: CanonicalProduct }
-  const normalized: Product & { canonical: CanonicalProduct } = {
-    ...raw,
-    id,
-    name,
-    sku,
-    price,
+  return { success: true, product: canonical };
+}
+
+/**
+ * Normalizes any untrusted or legacy product record into an authoritative CanonicalProduct.
+ * Throws ProductNormalizationError if the input lacks mandatory identity fields (id, name, sku).
+ */
+export function normalizeProduct(raw: unknown): CanonicalProduct {
+  const result = tryNormalizeProduct(raw);
+  if (result.success === false) {
+    throw new ProductNormalizationError(result.errors);
+  }
+  return result.product;
+}
+
+/**
+ * Compatibility Adapter: Converts an authoritative CanonicalProduct back into the
+ * legacy Product representation expected by existing POS and UI components.
+ *
+ * Operational / inventory state (stock, cost, location, serial numbers) is supplied
+ * via `legacyOperational` to preserve backward compatibility until INV-001.
+ */
+export function toLegacyProduct(
+  canonical: CanonicalProduct,
+  legacyOperational?: Partial<ProductOperationalState & LegacyProductInput>
+): Product & { canonical: CanonicalProduct } {
+  const op = legacyOperational || {};
+  const basePrice = typeof op.price === 'number' && !isNaN(op.price) && op.price >= 0
+    ? op.price
+    : (canonical.variants[0]?.pricing.retailPrice ?? 0);
+
+  const rawVariants = Array.isArray(op.variants) ? op.variants : undefined;
+
+  // Extract operational state (Transitional)
+  const stock = typeof op.stock === 'number' && !isNaN(op.stock) && op.stock >= 0
+    ? op.stock
+    : (rawVariants
+        ? rawVariants.reduce((sum, v) => sum + (Number((v as any).stock) || 0), 0)
+        : 0);
+
+  const cost = typeof op.cost === 'number' && !isNaN(op.cost) && op.cost >= 0
+    ? op.cost
+    : (canonical.variants[0]?.pricing.costPrice ?? 0);
+
+  const location = typeof op.location === 'string' && op.location.trim().length > 0
+    ? op.location
+    : 'Store Shelf';
+  const reorderPoint = typeof op.reorderPoint === 'number' ? op.reorderPoint : 0;
+  const unit = op.unit || 'Piece';
+
+  // Map canonical variants to legacy ProductVariant structure
+  const legacyVariants: ProductVariant[] = canonical.variants.map((v) => {
+    // Find matching legacy variant for transitional stock
+    const legacyMatch = rawVariants
+      ? rawVariants.find(lv => lv.sku === v.sku || (lv as any).id === v.id)
+      : undefined;
+
+    const vStock = legacyMatch && typeof (legacyMatch as any).stock === 'number'
+      ? (legacyMatch as any).stock
+      : (canonical.variants.length === 1 ? stock : 0);
+
+    return {
+      sku: v.sku,
+      size: v.attributes?.size,
+      color: v.attributes?.color,
+      model: v.attributes?.model,
+      optionName: v.name,
+      stock: vStock,
+      costPrice: v.pricing.costPrice,
+      retailPrice: v.pricing.retailPrice,
+      wholesalePrice: v.pricing.wholesalePrice,
+      barcode: v.barcode,
+      imageUrl: v.imageUrl,
+      isActive: v.isActive
+    };
+  });
+
+  // Map packaging units to legacy PackagingUnit structure
+  const legacyPackagingUnits: PackagingUnit[] | undefined = canonical.packagingUnits?.map(u => ({
+    id: u.id,
+    unitName: u.unitName,
+    multiplier: u.multiplier,
+    base_unit: u.baseUnit,
+    sellingPrice: u.sellingPrice,
+    barcode: u.barcode,
+    sku: u.sku,
+    isDefaultSellingUnit: u.isDefaultSellingUnit,
+    isPackUnit: u.isPackUnit,
+    sellingMode: u.isPackUnit ? 'pack_selling' : 'retail_unit'
+  }));
+
+  const legacyProduct: Product & { canonical: CanonicalProduct } = {
+    id: canonical.id,
+    name: canonical.merchandising.name,
+    sku: canonical.sku,
+    price: basePrice,
     cost,
     stock,
-    category,
-    location: operational.location,
-    reorderPoint: operational.reorderPoint,
-    barcode: barcode || '',
-    qrCode: qrCode || '',
+    category: canonical.classification.category,
+    location,
+    reorderPoint,
+    barcode: canonical.barcode || '',
+    qrCode: canonical.qrCode || '',
     variants: legacyVariants,
-    salesCount: typeof raw.salesCount === 'number' ? raw.salesCount : 0,
-    imageUrl: merchandising.imageUrl,
-    images: merchandising.images,
-    description: merchandising.description,
-    brand: merchandising.brand,
-    model: merchandising.model,
-    rating: merchandising.rating,
-    reviewCount: merchandising.reviewCount,
-    specifications: merchandising.specifications,
-    reviews: raw.reviews,
-    isFeatured: merchandising.isFeatured,
-    isNewArrival: merchandising.isNewArrival,
-    isBestSeller: merchandising.isBestSeller,
-    originalPrice: merchandising.originalPrice,
-    discountPercent: merchandising.discountPercent,
-    status: lifecycle.status,
-    productType: classification.productType,
-    publishOnline: lifecycle.visibility.publishOnline,
-    sellOnPOS: lifecycle.visibility.sellOnPOS,
-    sellOnline: lifecycle.visibility.sellOnline,
-    returnable: lifecycle.returnable,
-    unit: operational.unit,
-    packagingUnits: packagingUnits.length > 0 ? packagingUnits : raw.packagingUnits,
-    packaging: raw.packaging,
-    bulkPackaging: raw.bulkPackaging,
+    salesCount: typeof (op as any).salesCount === 'number' ? (op as any).salesCount : 0,
+    imageUrl: canonical.merchandising.imageUrl,
+    images: canonical.merchandising.images,
+    description: canonical.merchandising.description,
+    brand: canonical.merchandising.brand,
+    model: canonical.merchandising.model,
+    rating: canonical.merchandising.rating,
+    reviewCount: canonical.merchandising.reviewCount,
+    specifications: canonical.merchandising.specifications,
+    reviews: (op as any).reviews,
+    isFeatured: canonical.merchandising.isFeatured,
+    isNewArrival: canonical.merchandising.isNewArrival,
+    isBestSeller: canonical.merchandising.isBestSeller,
+    originalPrice: canonical.merchandising.originalPrice,
+    discountPercent: canonical.merchandising.discountPercent,
+    status: canonical.lifecycle.status,
+    productType: canonical.classification.productType,
+    publishOnline: canonical.lifecycle.visibility.publishOnline,
+    sellOnPOS: canonical.lifecycle.visibility.sellOnPOS,
+    sellOnline: canonical.lifecycle.visibility.sellOnline,
+    returnable: canonical.lifecycle.returnable,
+    unit,
+    packagingUnits: legacyPackagingUnits,
     canonical
   };
 
-  return normalized;
+  return legacyProduct;
+}
+
+/**
+ * Convenience Pipeline: Validates untrusted raw data into CanonicalProduct,
+ * then maps it through the legacy compatibility adapter.
+ */
+export function normalizeToLegacyProduct(raw: unknown): Product & { canonical: CanonicalProduct } {
+  const canonical = normalizeProduct(raw);
+  return toLegacyProduct(canonical, isLegacyProductInput(raw) ? raw : undefined);
 }

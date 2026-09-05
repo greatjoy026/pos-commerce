@@ -16,7 +16,7 @@ import {
   Category,
   ExtractedProductInfo,
 } from '../types';
-import { normalizeProduct } from '../domain/product';
+import { normalizeToLegacyProduct, validateSkuFormat, validateSkuUniqueness } from '../domain/product';
 
 import StepBasicInfo from './product-form/StepBasicInfo';
 import StepVariants from './product-form/StepVariants';
@@ -311,7 +311,14 @@ export default function ProductFormModal({
     }
 
     if (step === 2) {
-      if (!form.sku.trim()) next.sku = 'SKU is required.';
+      const cleanSku = form.sku.trim();
+      if (!cleanSku) {
+        next.sku = 'SKU is required.';
+      } else if (!validateSkuFormat(cleanSku)) {
+        next.sku = 'SKU contains invalid characters. Use alphanumeric, dashes, dots, or underscores.';
+      } else if (!validateSkuUniqueness(availableProducts, cleanSku, initialProduct?.id)) {
+        next.sku = `SKU "${cleanSku}" is already in use by another product.`;
+      }
       if (form.inventoryTracking === 'SERIAL' && !form.serialNumber.trim()) {
         next.serialNumber = 'Serial number is required for serial-tracked products.';
       }
@@ -328,12 +335,25 @@ export default function ProductFormModal({
       if (!form.variants.length) next.variants = 'Add at least one variant or disable variants.';
       const duplicateSkus = new Set<string>();
       for (const variant of form.variants) {
-        const variantSku = cleanString(variant.sku).toLowerCase();
-        if (variantSku && duplicateSkus.has(variantSku)) {
-          next.variants = `Duplicate variant SKU: ${variant.sku}`;
+        const variantSku = cleanString(variant.sku);
+        const lowerVariantSku = variantSku.toLowerCase();
+        if (!variantSku) {
+          next.variants = 'All variants must have a SKU.';
           break;
         }
-        if (variantSku) duplicateSkus.add(variantSku);
+        if (!validateSkuFormat(variantSku)) {
+          next.variants = `Variant SKU "${variantSku}" contains invalid characters.`;
+          break;
+        }
+        if (duplicateSkus.has(lowerVariantSku)) {
+          next.variants = `Duplicate variant SKU: ${variantSku}`;
+          break;
+        }
+        if (!validateSkuUniqueness(availableProducts, variantSku, initialProduct?.id)) {
+          next.variants = `Variant SKU "${variantSku}" is already in use by another product.`;
+          break;
+        }
+        duplicateSkus.add(lowerVariantSku);
       }
     }
 
@@ -550,7 +570,7 @@ export default function ProductFormModal({
     if (isSaving) return;
     if (!validateAll()) return;
 
-    const product = normalizeProduct(buildProduct(finalStatus));
+    const product = normalizeToLegacyProduct(buildProduct(finalStatus));
 
     setIsSaving(true);
     try {

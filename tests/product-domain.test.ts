@@ -1,13 +1,23 @@
 /**
- * PROD-001: Product Domain Normalization Test Suite
+ * PROD-001 / PROD-001-F1: Canonical Product Domain Test Suite
  *
- * Verifies:
- * 1. Canonical normalization (Product -> Variant -> SKU -> Inventory boundary)
- * 2. Single-SKU vs. Multi-variant normalization
- * 3. Authoritative SKU resolution engine (exact SKU, barcode, variant SKU/barcode, packaging unit)
- * 4. Product, variant, and pricing validation rules
- * 5. Public storefront projection security boundary (prohibiting cost/supplier/internal data leakage)
- * 6. Catalog-wide SKU uniqueness verification
+ * Verifies the corrected Product Domain Architecture:
+ * 1. Canonical Product Normalization:
+ *    - Strict normalization: Missing identifiers (id, name, sku) produce errors; NO silent invention.
+ *    - Domain boundaries: CanonicalProduct and CanonicalVariant represent catalog identity only.
+ *    - Inventory isolation: No operational stock or cost fields in CanonicalProduct or CanonicalVariant.
+ *    - Single-SKU vs. Multi-variant normalization.
+ * 2. Legacy Compatibility Adapters:
+ *    - `toLegacyProduct` maps CanonicalProduct + transitional operational state to legacy Product.
+ *    - `normalizeToLegacyProduct` provides an end-to-end bridge for legacy stores.
+ * 3. Authoritative SKU Architecture:
+ *    - SKU resolution (base SKU, barcodes, variant SKU, variant barcode, packaging unit).
+ *    - SKU extraction consistency across sellable units.
+ *    - Catalog-wide case-insensitive uniqueness validation.
+ * 4. Public Catalog Projection Security Boundary (SEC-001 & SEC-005):
+ *    - Strictly omits costs, suppliers, serial numbers, batches, reorder points.
+ * 5. POS Adapter:
+ *    - Provides backward-compatible cart view without polluting canonical domain.
  */
 
 import { describe, it } from 'node:test';
@@ -15,20 +25,25 @@ import assert from 'node:assert/strict';
 
 import {
   normalizeProduct,
+  tryNormalizeProduct,
+  toLegacyProduct,
+  normalizeToLegacyProduct,
+  ProductNormalizationError,
   resolveProductSku,
   extractAllProductSkus,
   validateCanonicalProduct,
   validateSkuFormat,
   validateSkuUniqueness,
+  validateBarcodeUniqueness,
   toPublicCatalogProjection,
   toPOSProductView,
   generateCanonicalSku
 } from '../src/domain/product';
 
-describe('PROD-001 — Product Domain Normalization', () => {
+describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
 
-  describe('1. Canonical Product Normalization', () => {
-    it('normalizes a legacy single-SKU product into a canonical product with 1 default variant', () => {
+  describe('1. Canonical Product Normalization & Inventory Isolation', () => {
+    it('normalizes a single-SKU product into a CanonicalProduct with 1 default variant and NO inventory state in domain', () => {
       const rawLegacy = {
         id: 'prod-single-001',
         name: 'Classic Canvas Tote Bag',
@@ -40,38 +55,36 @@ describe('PROD-001 — Product Domain Normalization', () => {
         barcode: '123456789012',
         location: 'Store Shelf',
         reorderPoint: 10,
-        variants: [] // empty
+        variants: []
       };
 
-      const normalized = normalizeProduct(rawLegacy);
+      const canonical = normalizeProduct(rawLegacy);
 
-      // Verify backwards-compatible root properties
-      assert.equal(normalized.id, 'prod-single-001');
-      assert.equal(normalized.name, 'Classic Canvas Tote Bag');
-      assert.equal(normalized.sku, 'BG-CANVAS-01');
-      assert.equal(normalized.price, 29.99);
-      assert.equal(normalized.cost, 12.00);
-      assert.equal(normalized.stock, 50);
+      // Verify canonical identity & merchandising
+      assert.equal(canonical.id, 'prod-single-001');
+      assert.equal(canonical.sku, 'BG-CANVAS-01');
+      assert.equal(canonical.merchandising.name, 'Classic Canvas Tote Bag');
+      assert.equal(canonical.classification.category, 'Accessories');
+      assert.equal(canonical.barcode, '123456789012');
 
-      // Verify canonical aggregate
-      assert.ok(normalized.canonical);
-      assert.equal(normalized.canonical.id, 'prod-single-001');
-      assert.equal(normalized.canonical.sku, 'BG-CANVAS-01');
-      assert.equal(normalized.canonical.merchandising.name, 'Classic Canvas Tote Bag');
-      assert.equal(normalized.canonical.operational.cost, 12.00);
-      assert.equal(normalized.canonical.operational.stock, 50);
+      // INVENTORY ISOLATION: CanonicalProduct MUST NOT contain operational inventory state
+      const canonicalAny = canonical as any;
+      assert.equal('operational' in canonicalAny, false, 'CanonicalProduct must not contain operational state');
+      assert.equal('stock' in canonicalAny, false, 'CanonicalProduct must not contain root stock');
+      assert.equal('cost' in canonicalAny, false, 'CanonicalProduct must not contain root cost');
 
-      // Canonical variants: exactly 1 default variant representing the single-item SKU
-      assert.equal(normalized.canonical.variants.length, 1);
-      const defaultVar = normalized.canonical.variants[0];
+      // Exactly 1 default variant representing the single-item SKU
+      assert.equal(canonical.variants.length, 1);
+      const defaultVar = canonical.variants[0];
       assert.equal(defaultVar.sku, 'BG-CANVAS-01');
       assert.equal(defaultVar.pricing.retailPrice, 29.99);
-      assert.equal(defaultVar.pricing.costPrice, 12.00);
-      assert.equal(defaultVar.stock, 50);
       assert.equal(defaultVar.isDefault, true);
+
+      // INVENTORY ISOLATION: CanonicalVariant MUST NOT contain stock quantity
+      assert.equal('stock' in (defaultVar as any), false, 'CanonicalVariant must not contain stock');
     });
 
-    it('normalizes a multi-variant product into canonical variants with authoritative SKUs and attributes', () => {
+    it('normalizes a multi-variant product into CanonicalVariants with unique SKUs and no variant stock', () => {
       const rawMulti = {
         id: 'prod-multi-002',
         name: 'Technical Running Tee',
@@ -81,60 +94,161 @@ describe('PROD-001 — Product Domain Normalization', () => {
         stock: 60,
         category: 'Apparel',
         variants: [
-          { sku: 'APP-TEE-01-S-BLK', size: 'Small', color: 'Black', stock: 20, retailPrice: 45.00, costPrice: 18.00 },
-          { sku: 'APP-TEE-01-M-BLK', size: 'Medium', color: 'Black', stock: 25, retailPrice: 45.00, costPrice: 18.00 },
-          { sku: 'APP-TEE-01-L-BLU', size: 'Large', color: 'Blue', stock: 15, retailPrice: 48.00, costPrice: 19.00 }
+          { sku: 'APP-TEE-01-S-BLK', size: 'Small', color: 'Black', stock: 20, retailPrice: 45.00 },
+          { sku: 'APP-TEE-01-M-BLK', size: 'Medium', color: 'Black', stock: 25, retailPrice: 45.00 },
+          { sku: 'APP-TEE-01-L-BLU', size: 'Large', color: 'Blue', stock: 15, retailPrice: 48.00 }
         ]
       };
 
-      const normalized = normalizeProduct(rawMulti);
+      const canonical = normalizeProduct(rawMulti);
 
-      assert.equal(normalized.canonical.variants.length, 3);
-      assert.equal(normalized.canonical.variants[0].sku, 'APP-TEE-01-S-BLK');
-      assert.equal(normalized.canonical.variants[0].attributes.size, 'Small');
-      assert.equal(normalized.canonical.variants[0].attributes.color, 'Black');
-      assert.equal(normalized.canonical.variants[0].isDefault, true);
+      assert.equal(canonical.variants.length, 3);
+      assert.equal(canonical.variants[0].sku, 'APP-TEE-01-S-BLK');
+      assert.equal(canonical.variants[0].attributes?.size, 'Small');
+      assert.equal(canonical.variants[0].attributes?.color, 'Black');
+      assert.equal(canonical.variants[0].isDefault, true);
+      assert.equal('stock' in (canonical.variants[0] as any), false, 'Variant 0 must not contain stock');
 
-      assert.equal(normalized.canonical.variants[2].sku, 'APP-TEE-01-L-BLU');
-      assert.equal(normalized.canonical.variants[2].pricing.retailPrice, 48.00);
-      assert.equal(normalized.canonical.variants[2].isDefault, false);
-
-      // Backwards compatible variants array
-      assert.equal(normalized.variants.length, 3);
-      assert.equal(normalized.variants[0].sku, 'APP-TEE-01-S-BLK');
+      assert.equal(canonical.variants[2].sku, 'APP-TEE-01-L-BLU');
+      assert.equal(canonical.variants[2].pricing.retailPrice, 48.00);
+      assert.equal(canonical.variants[2].isDefault, false);
+      assert.equal('stock' in (canonical.variants[2] as any), false, 'Variant 2 must not contain stock');
     });
 
-    it('consolidates legacy packaging selling tiers into standardized packaging units', () => {
+    it('normalizes packaging units without inventory calculations', () => {
       const rawWithPackaging = {
         id: 'prod-pack-003',
         name: 'Energy Drink 250ml',
         sku: 'BV-EN-01',
         price: 2.50,
         stock: 120,
-        category: 'Groceries',
-        packaging: {
-          hasPackaging: true,
-          baseSellingUnitName: 'Can',
-          sellingTiers: [
-            { id: 'tier-1', name: 'Single Can', unitQuantity: 1, sellingPrice: 2.50, barcode: '990001' },
-            { id: 'tier-6', name: '6-Pack Box', unitQuantity: 6, sellingPrice: 13.50, barcode: '990006' },
-            { id: 'tier-24', name: 'Case 24', unitQuantity: 24, sellingPrice: 48.00, barcode: '990024' }
-          ]
-        }
+        packagingUnits: [
+          { id: 'u1', unitName: 'Single Can', multiplier: 1, baseUnit: 'Can', sellingPrice: 2.50, barcode: '990001' },
+          { id: 'u2', unitName: '6-Pack Box', multiplier: 6, baseUnit: 'Can', sellingPrice: 13.50, barcode: '990006', sku: 'BV-EN-01-6PK' }
+        ]
       };
 
-      const normalized = normalizeProduct(rawWithPackaging);
-      assert.ok(normalized.canonical.packagingUnits);
-      assert.equal(normalized.canonical.packagingUnits.length, 3);
-      assert.equal(normalized.canonical.packagingUnits[1].unitName, '6-Pack Box');
-      assert.equal(normalized.canonical.packagingUnits[1].multiplier, 6);
-      assert.equal(normalized.canonical.packagingUnits[1].sellingPrice, 13.50);
-      assert.equal(normalized.canonical.packagingUnits[1].barcode, '990006');
+      const canonical = normalizeProduct(rawWithPackaging);
+      assert.ok(canonical.packagingUnits);
+      assert.equal(canonical.packagingUnits.length, 2);
+      assert.equal(canonical.packagingUnits[1].unitName, '6-Pack Box');
+      assert.equal(canonical.packagingUnits[1].multiplier, 6);
+      assert.equal(canonical.packagingUnits[1].sku, 'BV-EN-01-6PK');
     });
   });
 
-  describe('2. Authoritative SKU Resolution Engine', () => {
-    const testProduct = normalizeProduct({
+  describe('2. Strict Normalization Validation (Anti-Silent Fallback Rule)', () => {
+    it('rejects input with missing SKU without inventing silent placeholders', () => {
+      const rawMissingSku = {
+        id: 'prod-no-sku',
+        name: 'Valid Product Name',
+        price: 25.00
+      };
+
+      const result = tryNormalizeProduct(rawMissingSku);
+      assert.equal(result.success, false);
+      if (!result.success) {
+        assert.ok(result.errors.some(e => e.field === 'sku'));
+      }
+
+      assert.throws(
+        () => normalizeProduct(rawMissingSku),
+        ProductNormalizationError
+      );
+    });
+
+    it('rejects input with missing name without inventing silent placeholders', () => {
+      const rawMissingName = {
+        id: 'prod-no-name',
+        sku: 'SKU-TEST-99',
+        price: 25.00
+      };
+
+      const result = tryNormalizeProduct(rawMissingName);
+      assert.equal(result.success, false);
+      if (!result.success) {
+        assert.ok(result.errors.some(e => e.field === 'name'));
+      }
+
+      assert.throws(
+        () => normalizeProduct(rawMissingName),
+        ProductNormalizationError
+      );
+    });
+
+    it('rejects input with duplicate variant SKUs within the same product', () => {
+      const rawDuplicateVariantSkus = {
+        id: 'prod-dup-var',
+        name: 'Duplicate SKU Shirt',
+        sku: 'SHIRT-01',
+        price: 30.00,
+        variants: [
+          { sku: 'SHIRT-01-RED', size: 'M', color: 'Red' },
+          { sku: 'SHIRT-01-RED', size: 'L', color: 'Red' } // Duplicate!
+        ]
+      };
+
+      const result = tryNormalizeProduct(rawDuplicateVariantSkus);
+      assert.equal(result.success, false);
+      if (!result.success) {
+        assert.ok(result.errors.some(e => e.message.includes('Duplicate variant SKU')));
+      }
+
+      assert.throws(
+        () => normalizeProduct(rawDuplicateVariantSkus),
+        ProductNormalizationError
+      );
+    });
+  });
+
+  describe('3. Legacy Compatibility Adapters', () => {
+    it('toLegacyProduct bridges CanonicalProduct with transitional operational state for existing UI', () => {
+      const raw = {
+        id: 'prod-bridge-001',
+        name: 'Bridged Running Shoes',
+        sku: 'SH-RUN-01',
+        price: 120.00,
+        cost: 50.00,
+        stock: 35,
+        location: 'Warehouse B',
+        reorderPoint: 5
+      };
+
+      const canonical = normalizeProduct(raw);
+      const legacy = toLegacyProduct(canonical, raw);
+
+      assert.equal(legacy.id, 'prod-bridge-001');
+      assert.equal(legacy.name, 'Bridged Running Shoes');
+      assert.equal(legacy.sku, 'SH-RUN-01');
+      assert.equal(legacy.price, 120.00);
+      assert.equal(legacy.cost, 50.00);
+      assert.equal(legacy.stock, 35);
+      assert.equal(legacy.location, 'Warehouse B');
+      assert.equal(legacy.reorderPoint, 5);
+      assert.ok(legacy.canonical);
+      assert.equal(legacy.canonical.id, 'prod-bridge-001');
+    });
+
+    it('normalizeToLegacyProduct executes complete validation and attaches canonical reference', () => {
+      const raw = {
+        id: 'prod-bridge-002',
+        name: 'Bridged Smart Watch',
+        sku: 'WT-SMART-01',
+        price: 250.00,
+        cost: 110.00,
+        stock: 20
+      };
+
+      const legacy = normalizeToLegacyProduct(raw);
+      assert.equal(legacy.sku, 'WT-SMART-01');
+      assert.equal(legacy.stock, 20);
+      assert.ok(legacy.canonical);
+      assert.equal(legacy.canonical.merchandising.name, 'Bridged Smart Watch');
+    });
+  });
+
+  describe('4. Authoritative SKU Resolution & Extraction Engine', () => {
+    const rawData = {
       id: 'prod-res-001',
       name: 'Wireless Gaming Mouse',
       sku: 'EL-GM-100',
@@ -143,16 +257,19 @@ describe('PROD-001 — Product Domain Normalization', () => {
       cost: 35.00,
       stock: 30,
       variants: [
-        { sku: 'EL-GM-100-WHT', color: 'White', stock: 12, retailPrice: 84.99, costPrice: 37.00, barcode: '880011223355' },
-        { sku: 'EL-GM-100-BLK', color: 'Matte Black', stock: 18, retailPrice: 79.99, costPrice: 35.00, barcode: '880011223366' }
+        { sku: 'EL-GM-100-BLK', color: 'Matte Black', stock: 18, retailPrice: 79.99, costPrice: 35.00, barcode: '880011223366' },
+        { sku: 'EL-GM-100-WHT', color: 'White', stock: 12, retailPrice: 84.99, costPrice: 37.00, barcode: '880011223355' }
       ],
       packagingUnits: [
-        { id: 'pack-5', unitName: '5-Pack Bundle', multiplier: 5, base_unit: 'Piece', sellingPrice: 360.00, barcode: '880011223399' }
+        { id: 'pack-5', unitName: '5-Pack Bundle', multiplier: 5, baseUnit: 'Piece', sellingPrice: 360.00, barcode: '880011223399', sku: 'EL-GM-100-5PK' }
       ]
-    });
+    };
+
+    const canonical = normalizeProduct(rawData);
+    const legacy = toLegacyProduct(canonical, rawData);
 
     it('resolves product by base SKU string', () => {
-      const res = resolveProductSku(testProduct, 'EL-GM-100');
+      const res = resolveProductSku(canonical, 'EL-GM-100');
       assert.ok(res);
       assert.equal(res.found, true);
       assert.equal(res.matchType, 'base_sku');
@@ -161,7 +278,7 @@ describe('PROD-001 — Product Domain Normalization', () => {
     });
 
     it('resolves product by base barcode', () => {
-      const res = resolveProductSku(testProduct, '880011223344');
+      const res = resolveProductSku(canonical, '880011223344');
       assert.ok(res);
       assert.equal(res.found, true);
       assert.equal(res.matchType, 'barcode');
@@ -169,17 +286,16 @@ describe('PROD-001 — Product Domain Normalization', () => {
     });
 
     it('resolves specific variant by variant SKU', () => {
-      const res = resolveProductSku(testProduct, 'EL-GM-100-WHT');
+      const res = resolveProductSku(canonical, 'EL-GM-100-WHT');
       assert.ok(res);
       assert.equal(res.found, true);
       assert.equal(res.matchType, 'variant_sku');
       assert.equal(res.sku, 'EL-GM-100-WHT');
       assert.equal(res.price, 84.99);
-      assert.equal(res.cost, 37.00);
     });
 
     it('resolves specific variant by variant barcode', () => {
-      const res = resolveProductSku(testProduct, '880011223366');
+      const res = resolveProductSku(canonical, '880011223366');
       assert.ok(res);
       assert.equal(res.found, true);
       assert.equal(res.matchType, 'variant_barcode');
@@ -188,7 +304,7 @@ describe('PROD-001 — Product Domain Normalization', () => {
     });
 
     it('resolves packaging unit by packaging barcode with multiplier', () => {
-      const res = resolveProductSku(testProduct, '880011223399');
+      const res = resolveProductSku(canonical, '880011223399');
       assert.ok(res);
       assert.equal(res.found, true);
       assert.equal(res.matchType, 'packaging_unit');
@@ -197,13 +313,29 @@ describe('PROD-001 — Product Domain Normalization', () => {
       assert.equal(res.packagingUnit?.sellingPrice, 360.00);
     });
 
+    it('extractAllProductSkus extracts Base, Variant, and Packaging SKUs', () => {
+      const skus = extractAllProductSkus(canonical);
+      // Base (EL-GM-100) + 2 variants + 1 packaging SKU = 4 SKUs
+      assert.equal(skus.length, 4);
+      assert.ok(skus.some(s => s.sku === 'EL-GM-100' && s.skuType === 'base'));
+      assert.ok(skus.some(s => s.sku === 'EL-GM-100-WHT' && s.skuType === 'variant'));
+      assert.ok(skus.some(s => s.sku === 'EL-GM-100-BLK' && s.skuType === 'variant'));
+      assert.ok(skus.some(s => s.sku === 'EL-GM-100-5PK' && s.skuType === 'packaging'));
+
+      // ARCHITECTURAL INVARIANT: ProductSku contains NO stock or cost
+      for (const s of skus) {
+        assert.equal('stock' in (s as any), false, 'ProductSku must not contain stock');
+        assert.equal('cost' in (s as any), false, 'ProductSku must not contain cost');
+      }
+    });
+
     it('returns null for uncataloged barcode/SKU', () => {
-      const res = resolveProductSku(testProduct, 'NON-EXISTENT-SKU');
+      const res = resolveProductSku(canonical, 'NON-EXISTENT-SKU');
       assert.equal(res, null);
     });
   });
 
-  describe('3. Product Validation Rules & SKU Constraints', () => {
+  describe('5. Product Validation Rules & SKU Constraints', () => {
     it('validates SKU string format', () => {
       assert.equal(validateSkuFormat('SKU-1001'), true);
       assert.equal(validateSkuFormat('APP.TEE.BLK_01'), true);
@@ -212,66 +344,79 @@ describe('PROD-001 — Product Domain Normalization', () => {
       assert.equal(validateSkuFormat(''), false);
     });
 
-    it('rejects product with missing name, missing SKU, or negative pricing', () => {
-      const invalidProduct = {
-        id: 'prod-err',
-        name: '', // Missing
-        sku: 'INV@LID SKU', // Invalid format
-        price: -10, // Negative
-        operational: { cost: -5, stock: -1, reorderPoint: 0, location: 'Store Shelf', trackingMode: 'QUANTITY', stockRotationMethod: 'FIFO', unit: 'Piece' }
-      };
-
-      const result = validateCanonicalProduct(invalidProduct as any);
-      assert.equal(result.isValid, false);
-      const fields = result.errors.map(e => e.field);
-      assert.ok(fields.includes('name'));
-      assert.ok(fields.includes('sku'));
-      assert.ok(fields.includes('price'));
-      assert.ok(fields.includes('operational.cost'));
-      assert.ok(fields.includes('operational.stock'));
-    });
-
-    it('detects duplicate variant SKUs within the same product', () => {
-      const dupVariantProduct = normalizeProduct({
-        id: 'prod-dup',
-        name: 'Duplicate Test Hoodie',
-        sku: 'HD-001',
-        price: 59.99,
-        variants: [
-          { sku: 'HD-001-RED', size: 'M', color: 'Red', stock: 10, retailPrice: 59.99 },
-          { sku: 'HD-001-RED', size: 'L', color: 'Red', stock: 10, retailPrice: 59.99 } // Duplicate SKU!
-        ]
-      });
-
-      const result = validateCanonicalProduct(dupVariantProduct.canonical);
-      assert.equal(result.isValid, false);
-      assert.ok(result.errors.some(e => e.message.includes('Duplicate SKU detected')));
-    });
-
-    it('approves a fully valid product with multiple unique variants', () => {
-      const validProduct = normalizeProduct({
+    it('validates canonical product structure without requiring inventory fields', () => {
+      const canonical = normalizeProduct({
         id: 'prod-valid',
         name: 'Organic Cotton Polo',
         sku: 'POLO-001',
         price: 34.99,
-        cost: 14.50,
-        stock: 50,
         category: 'Apparel',
         variants: [
-          { sku: 'POLO-001-M-WHT', size: 'M', color: 'White', stock: 25, retailPrice: 34.99, costPrice: 14.50 },
-          { sku: 'POLO-001-L-WHT', size: 'L', color: 'White', stock: 25, retailPrice: 34.99, costPrice: 14.50 }
+          { sku: 'POLO-001-M-WHT', size: 'M', color: 'White', retailPrice: 34.99 },
+          { sku: 'POLO-001-L-WHT', size: 'L', color: 'White', retailPrice: 34.99 }
         ]
       });
 
-      const result = validateCanonicalProduct(validProduct.canonical);
+      const result = validateCanonicalProduct(canonical);
       assert.equal(result.isValid, true);
       assert.equal(result.errors.length, 0);
     });
   });
 
-  describe('4. Public Catalog Projection Security Boundary (SEC-001 & SEC-005)', () => {
+  describe('6. Catalog-wide SKU & Barcode Uniqueness Engine', () => {
+    const catalog = [
+      normalizeProduct({
+        id: 'p1',
+        name: 'Product 1',
+        sku: 'CAT-001',
+        price: 10,
+        variants: [
+          { sku: 'CAT-001-A', retailPrice: 10 },
+          { sku: 'CAT-001-B', retailPrice: 10 }
+        ]
+      }),
+      normalizeProduct({
+        id: 'p2',
+        name: 'Product 2',
+        sku: 'CAT-002',
+        price: 20
+      })
+    ];
+
+    it('validates SKU uniqueness across catalog', () => {
+      assert.equal(validateSkuUniqueness(catalog, 'NEW-SKU-999'), true);
+      assert.equal(validateSkuUniqueness(catalog, 'CAT-001'), false);
+      assert.equal(validateSkuUniqueness(catalog, 'cat-001-a'), false); // Case-insensitive
+      // Exclude p1 when editing p1: CAT-001 is allowed for p1 itself
+      assert.equal(validateSkuUniqueness(catalog, 'CAT-001', 'p1'), true);
+    });
+
+    it('validates barcode uniqueness across catalog', () => {
+      const catalogWithBarcodes = [
+        normalizeProduct({
+          id: 'p1',
+          name: 'Item 1',
+          sku: 'BAR-001',
+          barcode: '770001',
+          price: 10
+        })
+      ];
+
+      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770001'), false);
+      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770002'), true);
+      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770001', 'p1'), true);
+    });
+
+    it('generates canonical SKUs with standardized format', () => {
+      assert.equal(generateCanonicalSku('AP-TS', { size: 'L', color: 'BLK' }), 'AP-TS-L-BLK');
+      assert.equal(generateCanonicalSku('EL_CAM', { model: '4K' }), 'EL_CAM-4K');
+      assert.equal(generateCanonicalSku('RAW'), 'RAW');
+    });
+  });
+
+  describe('7. Public Catalog Projection Security Boundary (SEC-001 & SEC-005)', () => {
     it('strictly omits wholesale costs, suppliers, serials, and internal reorder points from public projections', () => {
-      const sensitiveProduct = normalizeProduct({
+      const rawSensitive = {
         id: 'prod-sec-999',
         name: 'Enterprise Security Router',
         sku: 'NET-RTR-01',
@@ -291,9 +436,9 @@ describe('PROD-001 — Product Domain Normalization', () => {
             costPrice: 210.00 // SENSITIVE
           }
         ]
-      });
+      };
 
-      const publicProjection = toPublicCatalogProjection(sensitiveProduct);
+      const publicProjection = toPublicCatalogProjection(rawSensitive as any, 50);
 
       // Verify essential storefront fields exist
       assert.equal(publicProjection.id, 'prod-sec-999');
@@ -319,58 +464,9 @@ describe('PROD-001 — Product Domain Normalization', () => {
     });
   });
 
-  describe('5. Catalog-wide SKU Extraction and Uniqueness Engine', () => {
-    const catalog = [
-      normalizeProduct({
-        id: 'p1',
-        name: 'Product 1',
-        sku: 'CAT-001',
-        price: 10,
-        variants: [
-          { sku: 'CAT-001-A', stock: 5, retailPrice: 10 },
-          { sku: 'CAT-001-B', stock: 5, retailPrice: 10 }
-        ]
-      }),
-      normalizeProduct({
-        id: 'p2',
-        name: 'Product 2',
-        sku: 'CAT-002',
-        price: 20
-      })
-    ];
-
-    it('extracts all sellable SKUs from products', () => {
-      const p1Skus = extractAllProductSkus(catalog[0]);
-      // Base SKU + 2 variants
-      assert.equal(p1Skus.length, 3);
-      assert.ok(p1Skus.some(s => s.sku === 'CAT-001'));
-      assert.ok(p1Skus.some(s => s.sku === 'CAT-001-A'));
-      assert.ok(p1Skus.some(s => s.sku === 'CAT-001-B'));
-
-      const p2Skus = extractAllProductSkus(catalog[1]);
-      assert.equal(p2Skus.length, 1);
-      assert.equal(p2Skus[0].sku, 'CAT-002');
-    });
-
-    it('validates SKU uniqueness across catalog', () => {
-      // Existing SKUs: CAT-001, CAT-001-A, CAT-001-B, CAT-002
-      assert.equal(validateSkuUniqueness(catalog, 'NEW-SKU-999'), true);
-      assert.equal(validateSkuUniqueness(catalog, 'CAT-001'), false);
-      assert.equal(validateSkuUniqueness(catalog, 'cat-001-a'), false); // Case-insensitive
-      // Exclude p1 when editing p1: CAT-001 is allowed for p1 itself
-      assert.equal(validateSkuUniqueness(catalog, 'CAT-001', 'p1'), true);
-    });
-
-    it('generates canonical SKUs with standardized format', () => {
-      assert.equal(generateCanonicalSku('AP-TS', { size: 'L', color: 'BLK' }), 'AP-TS-L-BLK');
-      assert.equal(generateCanonicalSku('EL_CAM', { model: '4K' }), 'EL_CAM-4K');
-      assert.equal(generateCanonicalSku('RAW'), 'RAW');
-    });
-  });
-
-  describe('6. POS & Consumer View Adapters', () => {
+  describe('8. POS View Adapter', () => {
     it('produces compliant POS product view preserving cart requirements', () => {
-      const prod = normalizeProduct({
+      const raw = {
         id: 'pos-view-1',
         name: 'Espresso Roast Beans',
         sku: 'CF-ESP-01',
@@ -378,9 +474,11 @@ describe('PROD-001 — Product Domain Normalization', () => {
         cost: 7.50,
         stock: 40,
         category: 'Groceries'
-      });
+      };
 
-      const posView = toPOSProductView(prod);
+      const canonical = normalizeProduct(raw);
+      const posView = toPOSProductView(canonical, raw);
+
       assert.equal(posView.id, 'pos-view-1');
       assert.equal(posView.name, 'Espresso Roast Beans');
       assert.equal(posView.sku, 'CF-ESP-01');

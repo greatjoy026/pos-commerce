@@ -2,19 +2,19 @@
 
 ## 1. Active Tasks
 
-### `PROD-001 — Product Domain Normalization`
-* **Priority**: P1
-* **Type**: Domain Architecture / Refactoring
+### `PROD-001-F1 — Product Domain Boundary & SKU Architecture Correction`
+* **Priority**: P1 (Correction)
+* **Type**: Domain Architecture / Boundary Hardening
 * **Owner**: Gemini (Implementation Lead)
 * **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
 * **Dependencies**: `SEC-001`
-* **Objective**: Established canonical domain layer in `/src/domain/product/` cleanly separating merchandising, classification, lifecycle, variants, and operational inventory state.
-  * Formalized `Product -> Variant -> SKU` hierarchy with authoritative SKU resolution engine.
-  * Non-destructive bidirectional normalization layer (`normalizeProduct`) preserving full backward compatibility for `Product`.
-  * Standardized single-item products to 1 default canonical variant; multi-variant products normalized with individual attributes, pricing, and barcodes.
-  * Consolidated legacy packaging tiers into standardized Packaging Units with multipliers.
-  * Centralized public catalog projection (`toPublicCatalogProjection`) strictly enforcing SEC-001/SEC-005 security boundary.
-  * Implemented 18 comprehensive domain tests (97 total test suite pass) and validated zero-error typecheck.
+* **Objective**: Corrected structural boundary issues identified in PROD-001 review:
+  * **Domain Isolation**: `CanonicalProduct` strictly limited to identity, merchandising, classification, lifecycle, variants, and packaging unit definitions. Stock, wholesale costs, locations, serials, and batch lots strictly excised from the domain aggregate.
+  * **Anti-Silent Fallback Rule**: Normalization rejects missing SKUs, missing names, duplicate variant SKUs within a product, negative prices, and invalid multipliers with structured errors instead of inventing silent placeholders.
+  * **Transitional Compatibility Adapters**: Implemented `toLegacyProduct` and `normalizeToLegacyProduct` to bridge `CanonicalProduct` with transitional `ProductOperationalState` without breaking existing UI views or premature inventory refactoring.
+  * **Authoritative SKU Resolution**: `resolveProductSku` resolves across base SKUs, base barcodes, variant SKUs, variant barcodes, and packaging barcodes with multipliers.
+  * **Catalog Projections**: Centralized public storefront catalog projection (`toPublicCatalogProjection`) and POS view adapter (`toPOSProductView`) in `/src/domain/catalog/projections.ts` and `/src/domain/product/projections.ts`.
+  * **Test Verification**: 22 domain tests in `tests/product-domain.test.ts` passing (101 total unit tests passing in `npm test`), zero TypeScript lint errors (`tsc --noEmit`), and successful production build.
 
 ---
 

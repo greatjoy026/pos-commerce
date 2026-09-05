@@ -51,34 +51,30 @@
 
 ---
 
-### Task ID: `PROD-001`
-* **Task Title**: Product Domain Normalization
+### Task ID: `PROD-001-F1`
+* **Task Title**: Product Domain Boundary & SKU Architecture Correction
 * **Submitter**: Gemini (Senior Software Engineer & Implementation Lead)
-* **Date Submitted**: 2026-09-04
+* **Date Submitted**: 2026-09-05
 * **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
 * **Designated Reviewer**: Architecture & Technical Supervisor
-* **Implementation Report**: `.ai/IMPLEMENTATION_REPORT.md` (Section 6)
+* **Implementation Report**: `.ai/IMPLEMENTATION_REPORT.md` (Section 7)
 * **Deliverables**:
-  * `/src/domain/product/types.ts`: Canonical domain models (`CanonicalProduct`, `CanonicalVariant`, `ProductSku`, `PackagingUnitInfo`, `PublicProductProjection`).
-  * `/src/domain/product/normalization.ts`: Non-destructive bidirectional normalization layer (`normalizeProduct`) upgrading legacy `Product` shapes.
+  * `/src/domain/product/types.ts`: Canonical product domain aggregate with strict isolation of inventory state (`stock`, `cost`, `location`, `reorderPoint`, `serialNumbers`, `batchNumber`).
+  * `/src/domain/product/normalization.ts`: Normalization pipeline with Anti-Silent Fallback invariant rejecting invalid inputs with structured errors, plus legacy compatibility adapters (`toLegacyProduct`, `normalizeToLegacyProduct`).
   * `/src/domain/product/skuService.ts`: Authoritative SKU resolution engine (`resolveProductSku`, `extractAllProductSkus`, `generateCanonicalSku`, `validateSkuUniqueness`).
-  * `/src/domain/product/validation.ts`: Canonical product and variant validation (`validateCanonicalProduct`, `validateSkuFormat`).
-  * `/src/domain/product/projections.ts`: Public catalog projection (`toPublicCatalogProjection`) enforcing SEC-001/SEC-005 security boundary, and POS view adapter (`toPOSProductView`).
-  * `/src/domain/product/index.ts`: Barrel export file.
-  * `/src/types.ts`: Canonical domain types integration and `Product.canonical` property.
-  * `/src/services/dbService.ts`: Integration with `normalizeProduct` and `toPublicCatalogProjection`.
-  * `/src/App.tsx`: Initial and local storage hydration with `normalizeProduct`.
-  * `/src/components/POSModule.tsx`: Barcode scanner and SKU search powered by `resolveProductSku`.
-  * `/src/components/ProductFormModal.tsx`: Form submission normalization via `normalizeProduct`.
-  * `/tests/product-domain.test.ts`: 18/18 domain tests passing (97/97 total test suite passing).
-  * `/.ai/DECISIONS.md`: Added ADR-013.
-  * `/.ai/RISKS.md`: Mitigated RISK-002.
-  * `/.ai/TASK_QUEUE.md`: Updated task status.
+  * `/src/domain/product/validation.ts`: Validation engine for SKU formatting and canonical integrity.
+  * `/src/domain/product/projections.ts` & `/src/domain/catalog/projections.ts`: Public catalog projection (`toPublicCatalogProjection`) omitting cost/supplier data, and POS view adapter (`toPOSProductView`).
+  * `/src/domain/product/index.ts` & `/src/domain/catalog/index.ts`: Barrel exports.
+  * `/tests/product-domain.test.ts`: 22 automated domain tests covering normalization, strict rejection, legacy adapters, SKU resolution, catalog uniqueness, projection security, and POS view adapter.
+  * `/.ai/DECISIONS.md`: Added ADR-014.
+  * `/.ai/RISKS.md`: Updated RISK-002.
+  * `/.ai/TASK_QUEUE.md`: Updated PROD-001-F1 status.
+  * `/.ai/IMPLEMENTATION_REPORT.md`: Appended Section 7 report.
 * **Test Verification**:
-  * 18/18 domain tests PASS.
-  * 79/79 authorization unit tests PASS.
-  * 97/97 total unit/domain tests PASS.
-  * Typecheck / Lint: Zero errors (`tsc --noEmit`).
+  * 22/22 domain tests PASS (`tests/product-domain.test.ts`).
+  * 79/79 authorization unit tests PASS (`tests/authorization.test.ts`).
+  * 101/101 total unit tests PASS (`npm test`).
+  * Typecheck / Lint: Zero errors (`npm run lint` / `tsc --noEmit`).
   * Production Build: Success (`vite build`).
 * **Production Deployment Status**: Standard application build verified. Production rules deployment held pending supervisor review (Status: NO).
 

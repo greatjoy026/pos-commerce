@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { Product, PublicProductProjection, Customer, StaffMember, Order, AuditLog, SystemSettings, PublicSettingsProjection, ShiftReportData } from '../types';
-import { normalizeProduct, toPublicCatalogProjection } from '../domain/product';
+import { normalizeToLegacyProduct, toPublicCatalogProjection } from '../domain/product';
 import { 
   INITIAL_PRODUCTS, 
   INITIAL_CUSTOMERS, 
@@ -349,7 +349,7 @@ export function subscribeProducts(onUpdate: (products: Product[]) => void, onErr
       snapshot.forEach(docSnap => {
         try {
           const rawData = docSnap.data();
-          prods.push(normalizeProduct(rawData));
+          prods.push(normalizeToLegacyProduct(rawData));
         } catch (e) {
           prods.push(docSnap.data() as Product);
         }
@@ -387,7 +387,7 @@ export function subscribePublicProducts(onUpdate: (products: PublicProductProjec
 
 export async function saveProductToDB(product: Product): Promise<void> {
   try {
-    const normalized = normalizeProduct(product);
+    const normalized = normalizeToLegacyProduct(product);
     const docRef = doc(db, COLLECTIONS.PRODUCTS, normalized.id);
     await setDoc(docRef, normalized, { merge: true });
 
