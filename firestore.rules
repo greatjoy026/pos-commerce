@@ -125,15 +125,20 @@ service cloud.firestore {
              data.category is string && data.category.size() <= 100;
     }
 
-    // Public Product Projection Schema (Safe for public storefront; STRICTLY excludes sensitive cost/supplier/stock fields)
+    // Public Product Projection Schema (Safe for public storefront; STRICTLY requires availability status and excludes sensitive cost/supplier/stock fields)
     function isValidPublicProduct(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
              data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
              data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
              data.price is number && data.price >= 0 &&
              data.category is string && data.category.size() <= 100 &&
-             (!('availability' in data) || (data.availability is map && data.availability.status is string && data.availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'])) &&
-             // Sensitive operational and financial fields MUST NOT exist in public projection (SEC-001, PROD-001-F2)
+             // Mandatory availability contract (PROD-001-F2.1)
+             ('availability' in data) &&
+             data.availability is map &&
+             ('status' in data.availability) &&
+             data.availability.status is string &&
+             data.availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'] &&
+             // Sensitive operational and financial fields MUST NOT exist in public projection (SEC-001, PROD-001-F2, PROD-001-F2.1)
              !('stock' in data) &&
              !('cost' in data) &&
              !('costPrice' in data) &&
@@ -141,6 +146,19 @@ service cloud.firestore {
              !('serialNumbers' in data) &&
              !('supplier' in data) &&
              !('batchNumber' in data);
+    }
+
+    // Public Variant Projection Schema (Mandatory availability, strictly no stock or costPrice)
+    function isValidPublicVariant(variant) {
+      return variant is map &&
+             variant.sku is string && variant.sku.size() > 0 && variant.sku.size() <= 100 &&
+             ('availability' in variant) &&
+             variant.availability is map &&
+             ('status' in variant.availability) &&
+             variant.availability.status is string &&
+             variant.availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'] &&
+             !('stock' in variant) &&
+             !('costPrice' in variant);
     }
 
     function isValidCustomer(data) {
@@ -260,6 +278,12 @@ service cloud.firestore {
       allow create: if isValidId(productId) && isInventoryStaff() && isValidPublicProduct(incoming());
       allow update: if isValidId(productId) && isInventoryStaff() && isValidPublicProduct(incoming());
       allow delete: if isValidId(productId) && isManagerOrAdmin();
+
+      match /variants/{variantId} {
+        allow read: if true;
+        allow create, update: if isValidId(variantId) && isInventoryStaff() && isValidPublicVariant(incoming());
+        allow delete: if isValidId(variantId) && isManagerOrAdmin();
+      }
     }
 
     // ==========================================

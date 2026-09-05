@@ -123,13 +123,30 @@ export function isValidPublicProduct(data: any): boolean {
     typeof data.category === 'string' && data.category.length <= 100
   );
   if (!basic) return false;
-  if ('availability' in data && data.availability) {
-    if (typeof data.availability.status !== 'string' || !['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'].includes(data.availability.status)) {
-      return false;
-    }
+  // Mandatory availability contract (PROD-001-F2.1)
+  if (!('availability' in data) || !data.availability || typeof data.availability !== 'object') {
+    return false;
   }
-  // Sensitive operational and financial fields MUST NOT exist in public projection (SEC-001, PROD-001-F2)
+  if (typeof data.availability.status !== 'string' || !['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'].includes(data.availability.status)) {
+    return false;
+  }
+  // Sensitive operational and financial fields MUST NOT exist in public projection (SEC-001, PROD-001-F2, PROD-001-F2.1)
   if ('stock' in data || 'cost' in data || 'costPrice' in data || 'reorderPoint' in data || 'supplier' in data || 'serialNumbers' in data || 'batchNumber' in data) {
+    return false;
+  }
+  return true;
+}
+
+export function isValidPublicVariant(variant: any): boolean {
+  if (!variant || typeof variant !== 'object') return false;
+  if (typeof variant.sku !== 'string' || variant.sku.length === 0 || variant.sku.length > 100) return false;
+  if (!('availability' in variant) || !variant.availability || typeof variant.availability !== 'object') {
+    return false;
+  }
+  if (typeof variant.availability.status !== 'string' || !['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'].includes(variant.availability.status)) {
+    return false;
+  }
+  if ('stock' in variant || 'costPrice' in variant) {
     return false;
   }
   return true;
@@ -359,13 +376,79 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
           name: 'Scanner',
           sku: 'SKU1',
           price: 100,
-          cost: 40, // VIOLATION
-          category: 'Hardware'
+          category: 'Hardware',
+          availability: { status: 'IN_STOCK' },
+          cost: 40 // VIOLATION
         };
         assert.strictEqual(isValidPublicProduct(sensitiveProd), false);
       });
 
-      test('Public product projection REJECTS exact stock (SEC-001, PROD-001-F2)', () => {
+      test('Public product projection REJECTS missing availability (PROD-001-F2.1)', () => {
+        const missingAvailability = {
+          id: 'p-1',
+          name: 'Scanner',
+          sku: 'SKU1',
+          price: 100,
+          category: 'Hardware'
+        };
+        assert.strictEqual(isValidPublicProduct(missingAvailability), false);
+      });
+
+      test('Public product projection REJECTS malformed availability (PROD-001-F2.1)', () => {
+        const nonObjectAvailability = {
+          id: 'p-1',
+          name: 'Scanner',
+          sku: 'SKU1',
+          price: 100,
+          category: 'Hardware',
+          availability: 'IN_STOCK'
+        };
+        assert.strictEqual(isValidPublicProduct(nonObjectAvailability), false);
+
+        const nullAvailability = {
+          id: 'p-1',
+          name: 'Scanner',
+          sku: 'SKU1',
+          price: 100,
+          category: 'Hardware',
+          availability: null
+        };
+        assert.strictEqual(isValidPublicProduct(nullAvailability), false);
+
+        const emptyAvailability = {
+          id: 'p-1',
+          name: 'Scanner',
+          sku: 'SKU1',
+          price: 100,
+          category: 'Hardware',
+          availability: {}
+        };
+        assert.strictEqual(isValidPublicProduct(emptyAvailability), false);
+      });
+
+      test('Public product projection REJECTS invalid availability status (PROD-001-F2.1)', () => {
+        const invalidStatus = {
+          id: 'p-1',
+          name: 'Scanner',
+          sku: 'SKU1',
+          price: 100,
+          category: 'Hardware',
+          availability: { status: 'AVAILABLE' }
+        };
+        assert.strictEqual(isValidPublicProduct(invalidStatus), false);
+
+        const nonStringStatus = {
+          id: 'p-1',
+          name: 'Scanner',
+          sku: 'SKU1',
+          price: 100,
+          category: 'Hardware',
+          availability: { status: 10 }
+        };
+        assert.strictEqual(isValidPublicProduct(nonStringStatus), false);
+      });
+
+      test('Public product projection REJECTS numeric stock (SEC-001, PROD-001-F2, PROD-001-F2.1)', () => {
         const stockLeakingProd = {
           id: 'p-1',
           name: 'Scanner',
@@ -377,16 +460,41 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
         assert.strictEqual(isValidPublicProduct(stockLeakingProd), false);
       });
 
-      test('Public product projection ACCEPTS valid projection with availability status and no internal fields', () => {
-        const validPublic = {
+      test('Public product projection REJECTS numeric stock alongside otherwise valid availability (PROD-001-F2.1)', () => {
+        const stockAlongsideValid = {
           id: 'p-1',
           name: 'Scanner',
           sku: 'SKU1',
           price: 100,
           category: 'Hardware',
-          availability: { status: 'IN_STOCK' }
+          availability: { status: 'IN_STOCK' },
+          stock: 15 // VIOLATION: stock present alongside valid availability
         };
-        assert.strictEqual(isValidPublicProduct(validPublic), true);
+        assert.strictEqual(isValidPublicProduct(stockAlongsideValid), false);
+      });
+
+      test('Public product projection ACCEPTS valid availability statuses (IN_STOCK, LOW_STOCK, OUT_OF_STOCK) (PROD-001-F2.1)', () => {
+        for (const status of ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK']) {
+          const validPublic = {
+            id: 'p-1',
+            name: 'Scanner',
+            sku: 'SKU1',
+            price: 100,
+            category: 'Hardware',
+            availability: { status }
+          };
+          assert.strictEqual(isValidPublicProduct(validPublic), true, `Should accept status ${status}`);
+        }
+      });
+
+      test('Public variant projection enforces mandatory availability and rejects stock and costPrice (PROD-001-F2.1)', () => {
+        assert.strictEqual(isValidPublicVariant({ sku: 'V1', availability: { status: 'IN_STOCK' } }), true);
+        assert.strictEqual(isValidPublicVariant({ sku: 'V1', availability: { status: 'LOW_STOCK' } }), true);
+        assert.strictEqual(isValidPublicVariant({ sku: 'V1', availability: { status: 'OUT_OF_STOCK' } }), true);
+        assert.strictEqual(isValidPublicVariant({ sku: 'V1' }), false);
+        assert.strictEqual(isValidPublicVariant({ sku: 'V1', availability: { status: 'UNKNOWN' } }), false);
+        assert.strictEqual(isValidPublicVariant({ sku: 'V1', availability: { status: 'IN_STOCK' }, stock: 5 }), false);
+        assert.strictEqual(isValidPublicVariant({ sku: 'V1', availability: { status: 'IN_STOCK' }, costPrice: 10 }), false);
       });
 
       test('Public storefront CANNOT create, update or delete products', () => {
@@ -899,8 +1007,8 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
             name: 'Public Item',
             sku: 'SKU-PUB',
             price: 50,
-            stock: 10,
             category: 'Retail',
+            availability: { status: 'IN_STOCK' },
             [field]: 'leaked_data'
           };
           assert.strictEqual(isValidPublicProduct(p), false, `Should reject ${field} in public product projection`);

@@ -194,7 +194,7 @@ export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
   };
 
   // 5. Pricing Base
-  const basePrice = typeof raw.price === 'number' && !isNaN(raw.price) && raw.price >= 0
+  const basePrice = typeof raw.price === 'number' && Number.isFinite(raw.price) && raw.price >= 0
     ? raw.price
     : (raw.variants?.[0]?.pricing?.retailPrice ?? raw.variants?.[0]?.retailPrice ?? 0);
 
@@ -278,9 +278,10 @@ export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
   }
 
   // 7. Packaging Units Consolidation (Catalog definition only, no inventory logic)
-  // ARCHITECTURAL RULE (PROD-001-F2):
+  // ARCHITECTURAL RULE (PROD-001-F2 / PROD-001-F2.1):
   // Silent packaging fallbacks are strictly FORBIDDEN.
-  // Multipliers <= 0 or negative prices MUST produce structured validation errors.
+  // Multiplier must be a finite number > 0 (Number.isFinite).
+  // Selling price, when supplied, must be a finite number >= 0 (Number.isFinite).
   // Packaging units missing an explicit identifier MUST fail validation.
   const packagingUnits: PackagingUnitInfo[] = [];
 
@@ -302,27 +303,41 @@ export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
         });
       }
 
-      if (typeof u.multiplier !== 'number' || isNaN(u.multiplier) || u.multiplier <= 0) {
+      if (typeof u.multiplier !== 'number' || !Number.isFinite(u.multiplier) || u.multiplier <= 0) {
         errors.push({
           field: `packagingUnits[${index}].multiplier`,
-          message: 'Packaging unit multiplier must be a positive number greater than 0.'
+          message: 'Packaging unit multiplier must be a finite number greater than 0.'
         });
       }
 
-      if (typeof u.sellingPrice === 'number' && u.sellingPrice < 0) {
-        errors.push({
-          field: `packagingUnits[${index}].sellingPrice`,
-          message: 'Selling price cannot be negative.'
-        });
+      let unitSellingPrice: number | undefined;
+      if (u.sellingPrice !== undefined && u.sellingPrice !== null) {
+        if (typeof u.sellingPrice !== 'number' || !Number.isFinite(u.sellingPrice) || u.sellingPrice < 0) {
+          errors.push({
+            field: `packagingUnits[${index}].sellingPrice`,
+            message: 'Selling price must be a finite number greater than or equal to 0.'
+          });
+        } else {
+          unitSellingPrice = u.sellingPrice;
+        }
+      } else {
+        unitSellingPrice = basePrice;
       }
 
-      if (uId && uName && typeof u.multiplier === 'number' && u.multiplier > 0) {
+      if (
+        uId &&
+        uName &&
+        typeof u.multiplier === 'number' &&
+        Number.isFinite(u.multiplier) &&
+        u.multiplier > 0 &&
+        unitSellingPrice !== undefined
+      ) {
         packagingUnits.push({
           id: uId,
           unitName: uName,
           multiplier: u.multiplier,
           baseUnit: u.base_unit || u.baseUnit || 'Piece',
-          sellingPrice: typeof u.sellingPrice === 'number' ? u.sellingPrice : basePrice,
+          sellingPrice: unitSellingPrice,
           barcode: u.barcode ? String(u.barcode).trim() : undefined,
           sku: u.sku ? String(u.sku).trim() : undefined,
           isDefaultSellingUnit: Boolean(u.isDefaultSellingUnit),
@@ -348,14 +363,35 @@ export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
         });
       }
 
-      if (typeof tier.unitQuantity !== 'number' || isNaN(tier.unitQuantity) || tier.unitQuantity <= 0) {
+      if (typeof tier.unitQuantity !== 'number' || !Number.isFinite(tier.unitQuantity) || tier.unitQuantity <= 0) {
         errors.push({
           field: `packaging.sellingTiers[${index}].unitQuantity`,
-          message: 'Multiplier must be greater than 0.'
+          message: 'Multiplier must be a finite number greater than 0.'
         });
       }
 
-      if (tierId && tierName && typeof tier.unitQuantity === 'number' && tier.unitQuantity > 0) {
+      let tierSellingPrice: number | undefined;
+      if (tier.sellingPrice !== undefined && tier.sellingPrice !== null) {
+        if (typeof tier.sellingPrice !== 'number' || !Number.isFinite(tier.sellingPrice) || tier.sellingPrice < 0) {
+          errors.push({
+            field: `packaging.sellingTiers[${index}].sellingPrice`,
+            message: 'Selling price must be a finite number greater than or equal to 0.'
+          });
+        } else {
+          tierSellingPrice = tier.sellingPrice;
+        }
+      } else {
+        tierSellingPrice = basePrice;
+      }
+
+      if (
+        tierId &&
+        tierName &&
+        typeof tier.unitQuantity === 'number' &&
+        Number.isFinite(tier.unitQuantity) &&
+        tier.unitQuantity > 0 &&
+        tierSellingPrice !== undefined
+      ) {
         packagingUnits.push({
           id: tierId,
           unitName: tierName,
@@ -363,7 +399,7 @@ export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
           baseUnit: raw.packaging?.baseSellingUnitName || 'Piece',
           barcode: tier.barcode ? String(tier.barcode).trim() : undefined,
           sku: tier.sku ? String(tier.sku).trim() : undefined,
-          sellingPrice: typeof tier.sellingPrice === 'number' ? tier.sellingPrice : basePrice,
+          sellingPrice: tierSellingPrice,
           isDefaultSellingUnit: Boolean(tier.isDefaultSellingUnit),
           isPackUnit: tier.unitQuantity > 1
         });

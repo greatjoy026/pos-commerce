@@ -639,7 +639,61 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       }));
     });
 
-    it('Rejects injection of sensitive cost and operational stock fields into public_products projection', async () => {
+    it('Enforces mandatory availability contract and rejects missing/malformed availability in public_products (PROD-001-F2.1)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+
+      // 1. Missing availability
+      await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-missing-avail'), {
+        id: 'prod-missing-avail',
+        name: 'Missing Avail Product',
+        sku: 'NO-AVAIL-01',
+        price: 40.00,
+        category: 'Test'
+      }));
+
+      // 2. Malformed availability (non-map or missing status)
+      await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-bad-avail-1'), {
+        id: 'prod-bad-avail-1',
+        name: 'Bad Avail Product',
+        sku: 'BAD-AVAIL-01',
+        price: 40.00,
+        availability: 'IN_STOCK', // String instead of map
+        category: 'Test'
+      }));
+
+      await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-bad-avail-2'), {
+        id: 'prod-bad-avail-2',
+        name: 'Bad Avail Product 2',
+        sku: 'BAD-AVAIL-02',
+        price: 40.00,
+        availability: {}, // Missing status
+        category: 'Test'
+      }));
+
+      // 3. Invalid availability status
+      await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-invalid-status'), {
+        id: 'prod-invalid-status',
+        name: 'Invalid Status Product',
+        sku: 'INV-STATUS-01',
+        price: 40.00,
+        availability: { status: 'AVAILABLE_NOW' }, // Invalid enum
+        category: 'Test'
+      }));
+
+      // Accepts valid statuses
+      for (const status of ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK']) {
+        await assertSucceeds(setDoc(doc(invMgr, 'public_products', `prod-valid-${status.toLowerCase()}`), {
+          id: `prod-valid-${status.toLowerCase()}`,
+          name: `Valid ${status} Product`,
+          sku: `VAL-${status}`,
+          price: 25.00,
+          category: 'Test',
+          availability: { status }
+        }));
+      }
+    });
+
+    it('Rejects injection of sensitive cost and operational stock fields into public_products projection (PROD-001-F2.1)', async () => {
       const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
       // Leaking cost
       await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-leak-cost'), {
@@ -648,15 +702,26 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         sku: 'LEAK-01',
         price: 50.00,
         cost: 15.00, // VIOLATION: cost is forbidden on public projection!
+        availability: { status: 'IN_STOCK' },
         category: 'Test'
       }));
-      // Leaking operational stock
+      // Leaking operational stock without availability
       await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-leak-stock'), {
         id: 'prod-leak-stock',
         name: 'Leaky Stock Product',
         sku: 'LEAK-02',
         price: 50.00,
         stock: 10, // VIOLATION: exact stock is forbidden on public projection!
+        category: 'Test'
+      }));
+      // Leaking operational stock alongside otherwise valid availability
+      await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-leak-stock-avail'), {
+        id: 'prod-leak-stock-avail',
+        name: 'Leaky Stock With Avail',
+        sku: 'LEAK-03',
+        price: 50.00,
+        stock: 10, // VIOLATION: exact stock forbidden alongside availability
+        availability: { status: 'IN_STOCK' },
         category: 'Test'
       }));
     });

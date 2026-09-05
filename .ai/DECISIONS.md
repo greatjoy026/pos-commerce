@@ -206,6 +206,26 @@ This register records foundational architectural decisions for `greatjoy026/pos-
   - Defective packaging multiplier and pricing data cannot corrupt pricing calculations.
   - The domain boundary is hardened and completely ready for `INV-001`.
 
+---
+
+### ADR-016: Strict Finite Number Validation, Mandatory Public Availability Schema, and Threshold Hardening (PROD-001-F2.1)
+
+* **Status**: `IMPLEMENTED (PROD-001-F2.1)`
+* **Context**: Technical supervisor review of `PROD-001-F2` identified edge-case vulnerabilities in packaging unit numeric validation (Infinity passed `typeof === 'number' && !isNaN && > 0`), non-deterministic availability threshold handling for invalid or non-finite inputs, and an optional availability loophole in `firestore.rules` schema validators.
+* **Decision**:
+  1. **Strict Finite Numeric Packaging Validation**: In `src/domain/product/normalization.ts`, validate packaging `multiplier` and `sellingPrice` strictly with `Number.isFinite(value)`.
+     - `multiplier` must be finite and `> 0` (rejects 0, -1, NaN, Infinity, -Infinity; accepts 0.1, 1, 6, 24).
+     - `sellingPrice` when present must be finite and `>= 0` (rejects -1, NaN, Infinity, -Infinity; accepts 0, 1, 10.50).
+     - Non-finite or invalid numbers push structured `ProductValidationError` items; no silent conversion or fallback.
+  2. **Mandatory Availability Contract in Firestore Rules**: In `firestore.rules`, enforce that `data.availability is map` and `data.availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK']` on all `/public_products/{id}` documents and nested variants. Availability is mandatory, never optional. Operational `stock` and sensitive pricing fields (`cost`, `costPrice`) are strictly rejected.
+  3. **Deterministic Public Availability Thresholds**: In `src/domain/product/projections.ts`, normalize `lowStockThreshold` using `DEFAULT_LOW_STOCK_THRESHOLD = 5`. Any invalid or non-finite threshold (NaN, Infinity, negative, zero) deterministically falls back to 5. Operational stock <= 0 or non-finite strictly resolves to `OUT_OF_STOCK`.
+  4. **Isolated Scope**: No inventory services, physical ledger migrations, or unrelated refactorings are introduced prior to `INV-001`.
+* **Consequences**:
+  - Packaging calculation vulnerabilities caused by non-finite or negative numbers are eradicated.
+  - Public catalog storefront projections are guaranteed to follow a uniform, mandatory availability schema.
+  - All regression tests (115/115) pass cleanly with zero lint or build errors.
+
+
 
 
 

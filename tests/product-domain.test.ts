@@ -203,58 +203,87 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
       );
     });
 
-    it('rejects packaging units with non-positive or invalid multiplier (PROD-001-F2)', () => {
-      const rawZeroMultiplier = {
-        id: 'prod-pack-zero',
-        name: 'Zero Multiplier Juice',
-        sku: 'JC-001',
-        price: 3.00,
-        category: 'Beverages',
-        packagingUnits: [
-          { id: 'u0', unitName: 'Invalid Pack', multiplier: 0, sellingPrice: 10.00 }
-        ]
-      };
-
-      const resZero = tryNormalizeProduct(rawZeroMultiplier);
-      assert.equal(resZero.success, false);
-      if (!resZero.success) {
-        assert.ok(resZero.errors.some(e => e.message.includes('must be a positive number')));
+    it('validates packaging unit multiplier with strict finite number checks (PROD-001-F2.1)', () => {
+      // Reject: 0, -1, NaN, Infinity, -Infinity
+      const invalidMultipliers = [0, -1, NaN, Infinity, -Infinity];
+      for (const m of invalidMultipliers) {
+        const raw = {
+          id: `prod-m-${m}`,
+          name: 'Invalid Multiplier Product',
+          sku: `SKU-M-${m}`,
+          price: 10.00,
+          category: 'Beverages',
+          packagingUnits: [
+            { id: 'u1', unitName: 'Pack', multiplier: m, sellingPrice: 20.00 }
+          ]
+        };
+        const result = tryNormalizeProduct(raw);
+        assert.equal(result.success, false, `Multiplier ${m} must be rejected`);
+        if (!result.success) {
+          assert.ok(result.errors.some(e => e.field.includes('multiplier')));
+        }
       }
 
-      const rawNegativeMultiplier = {
-        id: 'prod-pack-neg',
-        name: 'Negative Multiplier Juice',
-        sku: 'JC-002',
-        price: 3.00,
-        category: 'Beverages',
-        packagingUnits: [
-          { id: 'u-neg', unitName: 'Negative Pack', multiplier: -6, sellingPrice: 15.00 }
-        ]
-      };
-
-      const resNeg = tryNormalizeProduct(rawNegativeMultiplier);
-      assert.equal(resNeg.success, false);
-      if (!resNeg.success) {
-        assert.ok(resNeg.errors.some(e => e.message.includes('must be a positive number')));
+      // Accept: 0.1, 1, 6, 24
+      const validMultipliers = [0.1, 1, 6, 24];
+      for (const m of validMultipliers) {
+        const raw = {
+          id: `prod-m-valid-${m}`,
+          name: 'Valid Multiplier Product',
+          sku: `SKU-MV-${m}`,
+          price: 10.00,
+          category: 'Beverages',
+          packagingUnits: [
+            { id: 'u1', unitName: 'Pack', multiplier: m, sellingPrice: 20.00 }
+          ]
+        };
+        const result = tryNormalizeProduct(raw);
+        assert.equal(result.success, true, `Multiplier ${m} must be accepted`);
+        if (result.success) {
+          assert.equal(result.product.packagingUnits?.[0].multiplier, m);
+        }
       }
     });
 
-    it('rejects packaging units with negative selling price (PROD-001-F2)', () => {
-      const rawNegPrice = {
-        id: 'prod-pack-neg-price',
-        name: 'Negative Price Pack',
-        sku: 'PK-NEG-01',
-        price: 5.00,
-        category: 'Snacks',
-        packagingUnits: [
-          { id: 'u-bad', unitName: 'Bad Price Box', multiplier: 12, sellingPrice: -20.00 }
-        ]
-      };
+    it('validates packaging unit selling price with strict finite number checks (PROD-001-F2.1)', () => {
+      // Reject: -1, NaN, Infinity, -Infinity
+      const invalidPrices = [-1, NaN, Infinity, -Infinity];
+      for (const p of invalidPrices) {
+        const raw = {
+          id: `prod-p-${p}`,
+          name: 'Invalid Price Product',
+          sku: `SKU-P-${p}`,
+          price: 10.00,
+          category: 'Snacks',
+          packagingUnits: [
+            { id: 'u1', unitName: 'Box', multiplier: 6, sellingPrice: p }
+          ]
+        };
+        const result = tryNormalizeProduct(raw);
+        assert.equal(result.success, false, `Selling price ${p} must be rejected`);
+        if (!result.success) {
+          assert.ok(result.errors.some(e => e.field.includes('sellingPrice')));
+        }
+      }
 
-      const res = tryNormalizeProduct(rawNegPrice);
-      assert.equal(res.success, false);
-      if (!res.success) {
-        assert.ok(res.errors.some(e => e.message.includes('cannot be negative')));
+      // Accept: 0, 1, 10.50
+      const validPrices = [0, 1, 10.50];
+      for (const p of validPrices) {
+        const raw = {
+          id: `prod-p-valid-${p}`,
+          name: 'Valid Price Product',
+          sku: `SKU-PV-${p}`,
+          price: 10.00,
+          category: 'Snacks',
+          packagingUnits: [
+            { id: 'u1', unitName: 'Box', multiplier: 6, sellingPrice: p }
+          ]
+        };
+        const result = tryNormalizeProduct(raw);
+        assert.equal(result.success, true, `Selling price ${p} must be accepted`);
+        if (result.success) {
+          assert.equal(result.product.packagingUnits?.[0].sellingPrice, p);
+        }
       }
     });
 
@@ -589,20 +618,92 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
       assert.equal(publicProjection.variants[0].availability.status, 'IN_STOCK');
     });
 
-    it('computes public availability status correctly without leaking internal stock balances (PROD-001-F2)', () => {
-      // Out of stock
+    it('verifies public projection always contains availability and availability.status without exposing numeric stock (PROD-001-F2.1)', () => {
+      const canonical = normalizeProduct({
+        id: 'p-pub-contract',
+        name: 'Organic Honey',
+        sku: 'HNY-01',
+        price: 15.00,
+        category: 'Pantry',
+        variants: [
+          { sku: 'HNY-01-500G', retailPrice: 15.00 },
+          { sku: 'HNY-01-1KG', retailPrice: 28.00 }
+        ]
+      });
+
+      const projection = toPublicCatalogProjection(canonical, 12);
+
+      // Root public contract
+      assert.ok(projection.availability, 'projection must contain availability');
+      assert.ok(projection.availability.status, 'projection must contain availability.status');
+      assert.ok(
+        ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'].includes(projection.availability.status),
+        'status must be valid enum'
+      );
+      assert.equal((projection as any).stock, undefined, 'projection.stock must be undefined');
+
+      // Variant public contract
+      assert.ok(projection.variants && projection.variants.length === 2);
+      for (const v of projection.variants) {
+        assert.ok(v.availability, 'variant must contain availability');
+        assert.ok(v.availability.status, 'variant must contain availability.status');
+        assert.ok(
+          ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'].includes(v.availability.status),
+          'variant status must be valid enum'
+        );
+        assert.equal((v as any).stock, undefined, 'variant.stock must be undefined');
+      }
+    });
+
+    it('computes public availability status correctly and handles threshold edge cases deterministically (PROD-001-F2, PROD-001-F2.1)', () => {
+      // Standard threshold is 5
+      // stock = 0 → OUT_OF_STOCK
       assert.equal(computePublicAvailabilityStatus(0), 'OUT_OF_STOCK');
       assert.equal(computePublicAvailabilityStatus(-3), 'OUT_OF_STOCK');
+      assert.equal(computePublicAvailabilityStatus(-Infinity), 'OUT_OF_STOCK');
+      assert.equal(computePublicAvailabilityStatus(Infinity), 'OUT_OF_STOCK');
       assert.equal(computePublicAvailabilityStatus(NaN), 'OUT_OF_STOCK');
 
       // Low stock (threshold default is 5)
+      // stock = 1 → LOW_STOCK (1 <= 5)
       assert.equal(computePublicAvailabilityStatus(1), 'LOW_STOCK');
       assert.equal(computePublicAvailabilityStatus(3), 'LOW_STOCK');
+      // stock = 5 → LOW_STOCK (5 <= 5)
       assert.equal(computePublicAvailabilityStatus(5), 'LOW_STOCK');
 
-      // In stock
+      // In stock (threshold default is 5)
+      // stock = 6 → IN_STOCK (6 > 5)
       assert.equal(computePublicAvailabilityStatus(6), 'IN_STOCK');
       assert.equal(computePublicAvailabilityStatus(100), 'IN_STOCK');
+
+      // Invalid threshold values (must safely and deterministically default to 5)
+      const invalidThresholds = [NaN, Infinity, -Infinity, -5, 0, undefined as any];
+      for (const thresh of invalidThresholds) {
+        assert.equal(
+          computePublicAvailabilityStatus(1, thresh),
+          'LOW_STOCK',
+          `stock=1 with threshold=${thresh} should default to 5 and yield LOW_STOCK`
+        );
+        assert.equal(
+          computePublicAvailabilityStatus(5, thresh),
+          'LOW_STOCK',
+          `stock=5 with threshold=${thresh} should default to 5 and yield LOW_STOCK`
+        );
+        assert.equal(
+          computePublicAvailabilityStatus(6, thresh),
+          'IN_STOCK',
+          `stock=6 with threshold=${thresh} should default to 5 and yield IN_STOCK`
+        );
+        assert.equal(
+          computePublicAvailabilityStatus(0, thresh),
+          'OUT_OF_STOCK',
+          `stock=0 with threshold=${thresh} should yield OUT_OF_STOCK`
+        );
+      }
+
+      // Valid custom threshold
+      assert.equal(computePublicAvailabilityStatus(8, 10), 'LOW_STOCK'); // 8 <= 10
+      assert.equal(computePublicAvailabilityStatus(12, 10), 'IN_STOCK'); // 12 > 10
     });
   });
 

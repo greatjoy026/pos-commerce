@@ -39,26 +39,45 @@ export function hasCanonicalProduct(p: unknown): p is { canonical: CanonicalProd
 }
 
 /**
+ * Default threshold for Low Stock classification.
+ */
+export const DEFAULT_LOW_STOCK_THRESHOLD = 5;
+
+/**
  * Computes public availability status from operational stock.
  *
- * TRANSITIONAL ARCHITECTURAL NOTE (PROD-001-F2):
- * Authoritative stock balances and warehouse allocations are strictly excluded
- * from the public catalog. Public clients only receive discrete availability status:
- * - stock <= 0 => 'OUT_OF_STOCK'
- * - 0 < stock <= lowStockThreshold => 'LOW_STOCK'
- * - stock > lowStockThreshold => 'IN_STOCK'
+ * DETERMINISTIC BEHAVIOR & CONTRACT (PROD-001-F2.1):
+ * 1. Stock handling:
+ *    - Valid finite stock:
+ *      - stock <= 0                → 'OUT_OF_STOCK'
+ *      - 0 < stock <= threshold    → 'LOW_STOCK'
+ *      - stock > threshold         → 'IN_STOCK'
+ *    - Invalid stock (NaN, Infinity, -Infinity, non-number):
+ *      - safely returns 'OUT_OF_STOCK'
+ * 2. Threshold normalization:
+ *    - lowStockThreshold defaults to DEFAULT_LOW_STOCK_THRESHOLD (5).
+ *    - If lowStockThreshold is not a finite number or is <= 0 (e.g., NaN, Infinity, -Infinity, negative, zero),
+ *      it safely and deterministically normalizes to DEFAULT_LOW_STOCK_THRESHOLD (5), preventing nonsensical
+ *      availability classifications without creating runtime crashes.
  *
- * The underlying stock count remains private behind this projection boundary
- * until INV-001 establishes dedicated inventory ledgers and availability services.
+ * The underlying stock count remains strictly private behind this projection boundary.
  */
 export function computePublicAvailabilityStatus(
   stock: number,
-  lowStockThreshold: number = 5
+  lowStockThreshold: number = DEFAULT_LOW_STOCK_THRESHOLD
 ): PublicAvailabilityStatus {
-  if (typeof stock !== 'number' || isNaN(stock) || stock <= 0) {
+  if (typeof stock !== 'number' || !Number.isFinite(stock) || stock <= 0) {
     return 'OUT_OF_STOCK';
   }
-  if (stock <= lowStockThreshold) {
+
+  const effectiveThreshold =
+    typeof lowStockThreshold === 'number' &&
+    Number.isFinite(lowStockThreshold) &&
+    lowStockThreshold > 0
+      ? lowStockThreshold
+      : DEFAULT_LOW_STOCK_THRESHOLD;
+
+  if (stock <= effectiveThreshold) {
     return 'LOW_STOCK';
   }
   return 'IN_STOCK';

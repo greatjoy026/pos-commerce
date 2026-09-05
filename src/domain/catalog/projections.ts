@@ -9,5 +9,6 @@
 export {
   toPublicCatalogProjection,
   toPOSProductView,
-  computePublicAvailabilityStatus
+  computePublicAvailabilityStatus,
+  DEFAULT_LOW_STOCK_THRESHOLD
 } from '../product/projections';

@@ -2,21 +2,18 @@
 
 ## 1. Active Tasks
 
-### `PROD-001-F2 — Final Product Domain Boundary Hardening`
-* **Priority**: P1 (Architectural Review Correction)
-* **Type**: Domain Architecture / Boundary Hardening
+### `PROD-001-F2.1 — Final Validation and Public Contract Correction`
+* **Priority**: P1 (Architectural Supervisor Review Correction)
+* **Type**: Domain Architecture / Boundary Validation
 * **Owner**: Gemini (Implementation Lead)
 * **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
-* **Dependencies**: `PROD-001-F1`, `SEC-001`
-* **Objective**: Addressed all architectural review findings from PROD-001-F1:
-  * **Public Catalog Stock Stripping**: Completely eliminated raw operational stock fields from `/public_products` projections and replaced with derived categorical state (`availability: { status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' }`).
-  * **Firestore Rules Enforcement**: Updated `isValidPublicProduct` in `firestore.rules` to strictly forbid numeric `stock` and validate `availability.status`.
-  * **Strict Packaging Validation**: Enforced that packaging unit multipliers must be positive numbers (`> 0`) and selling prices non-negative numbers (`>= 0`), rejecting defective inputs without fallback.
-  * **Mandatory Category**: Enforced required non-empty category without silent default.
-  * **Business Defaults**: Standardized default `rating` to 0 (unrated) and `lifecycle.status` to `'Draft'`.
-  * **Catalog-wide SKU & Barcode Uniqueness**: Extended validation engines to detect collisions across base, variant, and packaging units.
-  * **Type Safety**: Eliminated `any` casts in domain normalization, projection, and SKU service layers.
-  * **Verification**: 109/109 tests passing (`npm test`), zero TypeScript errors (`tsc --noEmit`), clean production build (`npm run build`).
+* **Dependencies**: `PROD-001-F2`, `SEC-001`
+* **Objective**: Addressed all findings from the architectural supervisor review of PROD-001-F2:
+  * **Packaging Number Validation**: Enforced `Number.isFinite(value)` for `packagingUnits[].multiplier` (> 0) and `packagingUnits[].sellingPrice` (>= 0). Rejected 0, -1, NaN, Infinity, -Infinity; accepted 0.1, 1, 6, 24 for multipliers, and 0, 1, 10.50 for selling prices. Structured errors generated with zero silent fallback.
+  * **Hardened Projection Logic**: Added `DEFAULT_LOW_STOCK_THRESHOLD = 5` and hardened `computePublicAvailabilityStatus` to deterministically normalize invalid/non-finite threshold values. Handled non-finite and negative stock safely.
+  * **Mandatory Public Availability in Firestore Rules**: Updated `isValidPublicProduct` and `isValidPublicVariant` in `firestore.rules` to make `availability` map and valid `status` mandatory (never optional). Forbade numeric `stock` and sensitive cost fields across public products and variants subcollection.
+  * **Regression Suite**: Added comprehensive regression tests in `tests/product-domain.test.ts` and updated `tests/authorization.test.ts` and `tests/emulator-rules.test.ts`.
+  * **Verification**: 115/115 unit/domain tests passing (`npm test`), zero TypeScript errors (`npm run lint`), and clean build (`npm run build`).
 
 ---
 
