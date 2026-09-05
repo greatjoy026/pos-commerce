@@ -1,16 +1,33 @@
 /**
- * Canonical Product Domain Types (PROD-001 / PROD-001-F1)
+ * Canonical Product Domain Types (PROD-001 / PROD-001-F1 / PROD-001-F2)
  *
  * Architectural Principle:
  * The canonical Product domain represents product/catalog identity ONLY.
  * It does NOT contain authoritative inventory, stock ledgers, or warehouse state.
  *
- * Domain Hierarchy:
- * Product -> Merchandising, Classification, Lifecycle, Variants -> Sellable SKU
+ * Formal Domain Hierarchy (ADR-015):
+ * Product
+ *     ↓
+ * Variant
+ *     ↓
+ * SKU
+ *     ↓
+ * Inventory (Operational state belonging to INV-001)
  *
- * Inventory Boundary:
- * Product -> SKU -> Inventory (Authoritative inventory belongs to future task INV-001)
+ * Definitions:
+ * - Product: Catalog-level product identity and merchandising concept. It is not inventory.
+ * - Variant: Distinct sellable configuration of a Product (e.g. Size: Medium / Color: Black).
+ * - SKU: Uniquely sellable unit identifier with unambiguous meaning across the catalog.
+ * - Inventory: Operational quantity/balance/state of a SKU (strictly isolated from Product/Variant/SKU).
+ *
+ * Product.sku Semantics:
+ * - Simple Product: Single-SKU product where CanonicalProduct.sku matches the single default
+ *   variant's SKU for backward compatibility.
+ * - Multi-Variant Product: CanonicalProduct.sku is the base family/model catalog identifier,
+ *   while each CanonicalVariant has its own distinct sellable SKU (e.g., APP-TEE-01 vs APP-TEE-01-S-BLK).
  */
+
+import { ProductReview } from '../../types';
 
 export type CanonicalProductStatus = 'Active' | 'Draft' | 'Archived';
 
@@ -27,6 +44,48 @@ export type CanonicalTrackingMode = 'QUANTITY' | 'SERIAL' | 'BATCH' | 'NONE';
 export type CanonicalRotationMethod = 'FIFO' | 'FEFO' | 'LIFO' | 'MANUAL';
 
 export type SkuType = 'base' | 'variant' | 'packaging';
+
+export type PublicAvailabilityStatus = 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+
+export interface PublicAvailabilityInfo {
+  status: PublicAvailabilityStatus;
+}
+
+export interface PublicVariantProjection {
+  sku: string;
+  size?: string;
+  color?: string;
+  availability: PublicAvailabilityInfo;
+  retailPrice?: number;
+  imageUrl?: string;
+  isActive?: boolean;
+}
+
+export interface PublicProductProjection {
+  id: string;
+  name: string;
+  sku: string;
+  price: number;
+  availability: PublicAvailabilityInfo;
+  category: string;
+  imageUrl?: string;
+  description?: string;
+  brand?: string;
+  model?: string;
+  rating?: number;
+  reviewCount?: number;
+  originalPrice?: number;
+  discountPercent?: number;
+  isNewArrival?: boolean;
+  isBestSeller?: boolean;
+  isFeatured?: boolean;
+  images?: string[];
+  specifications?: Record<string, string>;
+  reviews?: ProductReview[];
+  unit?: string;
+  publishOnline?: boolean;
+  variants?: PublicVariantProjection[];
+}
 
 /**
  * Authoritative SKU Identity Entity
@@ -298,7 +357,7 @@ export interface LegacyProductInput extends LegacyProductOperationalInput {
   lifecycle?: Partial<ProductLifecycle>;
   operational?: Partial<ProductOperationalState>;
   salesCount?: number;
-  reviews?: unknown[];
+  reviews?: ProductReview[];
 }
 
 /**

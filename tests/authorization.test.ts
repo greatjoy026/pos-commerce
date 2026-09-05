@@ -114,8 +114,22 @@ export function isValidProduct(data: any): boolean {
 }
 
 export function isValidPublicProduct(data: any): boolean {
-  if (!isValidProduct(data)) return false;
-  if ('cost' in data || 'costPrice' in data || 'reorderPoint' in data || 'supplier' in data || 'serialNumbers' in data || 'batchNumber' in data) {
+  if (!data) return false;
+  const basic = (
+    typeof data.id === 'string' && data.id.length > 0 && data.id.length <= 128 &&
+    typeof data.name === 'string' && data.name.length > 0 && data.name.length <= 200 &&
+    typeof data.sku === 'string' && data.sku.length > 0 && data.sku.length <= 100 &&
+    typeof data.price === 'number' && data.price >= 0 &&
+    typeof data.category === 'string' && data.category.length <= 100
+  );
+  if (!basic) return false;
+  if ('availability' in data && data.availability) {
+    if (typeof data.availability.status !== 'string' || !['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'].includes(data.availability.status)) {
+      return false;
+    }
+  }
+  // Sensitive operational and financial fields MUST NOT exist in public projection (SEC-001, PROD-001-F2)
+  if ('stock' in data || 'cost' in data || 'costPrice' in data || 'reorderPoint' in data || 'supplier' in data || 'serialNumbers' in data || 'batchNumber' in data) {
     return false;
   }
   return true;
@@ -346,10 +360,33 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
           sku: 'SKU1',
           price: 100,
           cost: 40, // VIOLATION
-          stock: 10,
           category: 'Hardware'
         };
         assert.strictEqual(isValidPublicProduct(sensitiveProd), false);
+      });
+
+      test('Public product projection REJECTS exact stock (SEC-001, PROD-001-F2)', () => {
+        const stockLeakingProd = {
+          id: 'p-1',
+          name: 'Scanner',
+          sku: 'SKU1',
+          price: 100,
+          stock: 10, // VIOLATION: exact stock forbidden
+          category: 'Hardware'
+        };
+        assert.strictEqual(isValidPublicProduct(stockLeakingProd), false);
+      });
+
+      test('Public product projection ACCEPTS valid projection with availability status and no internal fields', () => {
+        const validPublic = {
+          id: 'p-1',
+          name: 'Scanner',
+          sku: 'SKU1',
+          price: 100,
+          category: 'Hardware',
+          availability: { status: 'IN_STOCK' }
+        };
+        assert.strictEqual(isValidPublicProduct(validPublic), true);
       });
 
       test('Public storefront CANNOT create, update or delete products', () => {

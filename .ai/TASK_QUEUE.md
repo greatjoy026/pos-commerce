@@ -2,19 +2,21 @@
 
 ## 1. Active Tasks
 
-### `PROD-001-F1 — Product Domain Boundary & SKU Architecture Correction`
-* **Priority**: P1 (Correction)
+### `PROD-001-F2 — Final Product Domain Boundary Hardening`
+* **Priority**: P1 (Architectural Review Correction)
 * **Type**: Domain Architecture / Boundary Hardening
 * **Owner**: Gemini (Implementation Lead)
 * **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
-* **Dependencies**: `SEC-001`
-* **Objective**: Corrected structural boundary issues identified in PROD-001 review:
-  * **Domain Isolation**: `CanonicalProduct` strictly limited to identity, merchandising, classification, lifecycle, variants, and packaging unit definitions. Stock, wholesale costs, locations, serials, and batch lots strictly excised from the domain aggregate.
-  * **Anti-Silent Fallback Rule**: Normalization rejects missing SKUs, missing names, duplicate variant SKUs within a product, negative prices, and invalid multipliers with structured errors instead of inventing silent placeholders.
-  * **Transitional Compatibility Adapters**: Implemented `toLegacyProduct` and `normalizeToLegacyProduct` to bridge `CanonicalProduct` with transitional `ProductOperationalState` without breaking existing UI views or premature inventory refactoring.
-  * **Authoritative SKU Resolution**: `resolveProductSku` resolves across base SKUs, base barcodes, variant SKUs, variant barcodes, and packaging barcodes with multipliers.
-  * **Catalog Projections**: Centralized public storefront catalog projection (`toPublicCatalogProjection`) and POS view adapter (`toPOSProductView`) in `/src/domain/catalog/projections.ts` and `/src/domain/product/projections.ts`.
-  * **Test Verification**: 22 domain tests in `tests/product-domain.test.ts` passing (101 total unit tests passing in `npm test`), zero TypeScript lint errors (`tsc --noEmit`), and successful production build.
+* **Dependencies**: `PROD-001-F1`, `SEC-001`
+* **Objective**: Addressed all architectural review findings from PROD-001-F1:
+  * **Public Catalog Stock Stripping**: Completely eliminated raw operational stock fields from `/public_products` projections and replaced with derived categorical state (`availability: { status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' }`).
+  * **Firestore Rules Enforcement**: Updated `isValidPublicProduct` in `firestore.rules` to strictly forbid numeric `stock` and validate `availability.status`.
+  * **Strict Packaging Validation**: Enforced that packaging unit multipliers must be positive numbers (`> 0`) and selling prices non-negative numbers (`>= 0`), rejecting defective inputs without fallback.
+  * **Mandatory Category**: Enforced required non-empty category without silent default.
+  * **Business Defaults**: Standardized default `rating` to 0 (unrated) and `lifecycle.status` to `'Draft'`.
+  * **Catalog-wide SKU & Barcode Uniqueness**: Extended validation engines to detect collisions across base, variant, and packaging units.
+  * **Type Safety**: Eliminated `any` casts in domain normalization, projection, and SKU service layers.
+  * **Verification**: 109/109 tests passing (`npm test`), zero TypeScript errors (`tsc --noEmit`), clean production build (`npm run build`).
 
 ---
 

@@ -125,15 +125,16 @@ service cloud.firestore {
              data.category is string && data.category.size() <= 100;
     }
 
-    // Public Product Projection Schema (Safe for public storefront; STRICTLY excludes sensitive cost/supplier fields)
+    // Public Product Projection Schema (Safe for public storefront; STRICTLY excludes sensitive cost/supplier/stock fields)
     function isValidPublicProduct(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
              data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
              data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
              data.price is number && data.price >= 0 &&
-             data.stock is number && data.stock >= 0 &&
              data.category is string && data.category.size() <= 100 &&
-             // Sensitive fields MUST NOT exist in public projection
+             (!('availability' in data) || (data.availability is map && data.availability.status is string && data.availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'])) &&
+             // Sensitive operational and financial fields MUST NOT exist in public projection (SEC-001, PROD-001-F2)
+             !('stock' in data) &&
              !('cost' in data) &&
              !('costPrice' in data) &&
              !('reorderPoint' in data) &&

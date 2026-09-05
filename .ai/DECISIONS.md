@@ -188,6 +188,24 @@ This register records foundational architectural decisions for `greatjoy026/pos-
   - Data corruption and untyped inputs are caught early at the boundary with structured error feedback.
   - Existing UI components continue running seamlessly via transitional adapters.
 
+---
+
+### ADR-015: Final Product Domain Boundary Hardening & Public Availability Projection (PROD-001-F2)
+
+* **Status**: `IMPLEMENTED (PROD-001-F2)`
+* **Context**: Technical supervisor review of `PROD-001-F1` identified that exact stock quantities (`product.stock`, `variant.stock`) were still exposed in `/public_products` projections and permitted by `firestore.rules`. Additionally, packaging unit multipliers and prices lacked strict normalization validation, `category` allowed silent fallback, business defaults for `rating` and `status` required explicit specification, and SKU/barcode uniqueness checks needed cross-type coverage.
+* **Decision**:
+  1. **Strict Public Availability Status**: The public projection (`/public_products`) strictly strips all exact operational stock numbers (`stock`). Public availability is exposed exclusively via derived categorical state: `availability: { status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' }` computed at the projection boundary.
+  2. **Firestore Security Rules Hardening**: `isValidPublicProduct` in `firestore.rules` removes `stock is number` and strictly validates `availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK']`, rejecting any public product document containing numeric `stock` fields.
+  3. **Strict Packaging Unit Validation**: Normalization strictly enforces that `multiplier` is a finite number greater than 0, and `sellingPrice` is a finite non-negative number (`>= 0`). Silent fallbacks to 1 or 0 are completely prohibited.
+  4. **Strict Mandatory Category**: Missing or whitespace-only `category` is strictly rejected with a structured `ProductValidationError` instead of inventing `'Uncategorized'`.
+  5. **Standardized Business Defaults**: When omitted, `merchandising.rating` defaults to 0 (unrated) and `lifecycle.status` defaults to `'Draft'` (safest lifecycle state).
+  6. **Cross-Type SKU & Barcode Uniqueness**: `validateSkuUniqueness` and `validateBarcodeUniqueness` detect collisions across all sellable unit types: base products, variants, and packaging units.
+* **Consequences**:
+  - Exact inventory counts are no longer leaked to public web storefront consumers or scrapers.
+  - Defective packaging multiplier and pricing data cannot corrupt pricing calculations.
+  - The domain boundary is hardened and completely ready for `INV-001`.
+
 
 
 

@@ -635,6 +635,76 @@ In `/src/domain/catalog/projections.ts` and `/src/domain/product/projections.ts`
 
 ---
 
-**PROD-001-F1 CORRECTION COMPLETE — AWAITING ARCHITECTURAL REVIEW**
+# Implementation Report: PROD-001-F2
+
+**Task ID**: PROD-001-F2  
+**Task Name**: Final Product Domain Boundary Hardening  
+**Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`  
+**Author**: Gemini (Senior Software Engineer & Implementation Lead)  
+**Date**: 2026-09-05  
+
+---
+
+## 1. Objective & Architectural Scope
+
+Address the remaining findings from the PROD-001-F1 architectural review with targeted corrections:
+1. **Public Catalog Stock Stripping**: Strip `stock` from public projections and introduce categorical `availability: { status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' }`.
+2. **Firestore Rules Hardening**: Forbid numeric `stock` in `/public_products` and validate `availability.status`.
+3. **Strict Packaging Unit Validation**: Enforce positive multiplier (`> 0`) and non-negative selling price (`>= 0`) without silent defaults.
+4. **Mandatory Category**: Reject missing or blank categories with structured errors.
+5. **Business Defaults**: Standardize `rating` defaulting to 0 (unrated) and `lifecycle.status` defaulting to `'Draft'`.
+6. **Cross-Type SKU & Barcode Uniqueness**: Detect collisions across base products, variants, and packaging units.
+7. **Type Safety**: Eliminate all `any` casts in domain normalization, projection, and SKU service layers.
+
+---
+
+## 2. Changes Implemented
+
+### 2.1 Public Catalog Availability Projection & Security Rules
+* In `src/domain/product/projections.ts`:
+  * Implemented `computePublicAvailabilityStatus(stock: number, lowStockThreshold: number = 5): PublicAvailabilityStatus`.
+  * Updated `toPublicCatalogProjection` to strip all `stock` fields from product and variants, replacing them with `availability: { status }`.
+* In `src/domain/catalog/projections.ts`:
+  * Re-exported `computePublicAvailabilityStatus` and updated projection types.
+* In `firestore.rules`:
+  * Updated `isValidPublicProduct` helper to remove `data.stock is number` and require `isValidAvailability(data.availability)`.
+  * Added `isValidAvailability` helper ensuring `availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK']` and forbidding `stock` in `data`.
+  * Updated `isValidPublicVariant` to require `isValidAvailability(variant.availability)` and forbid `variant.stock`.
+
+### 2.2 Strict Normalization & Anti-Silent Fallbacks
+* In `src/domain/product/normalization.ts`:
+  * Packaging Units: Validates that `multiplier` is a finite number greater than 0, and `sellingPrice` is a finite number `>= 0`. If invalid, rejects with `ProductNormalizationError`.
+  * Mandatory Category: Validates that `category` is a non-empty string; missing or whitespace-only values produce `category: Category is required`.
+  * Business Defaults: `merchandising.rating` defaults to 0 (unrated); `lifecycle.status` defaults to `'Draft'`.
+  * Type Safety: Removed `any` casts across normalization functions using explicit union guards.
+
+### 2.3 Authoritative SKU & Barcode Resolution
+* In `src/domain/product/skuService.ts`:
+  * Updated `extractAllProductSkus` to index packaging units and their barcodes regardless of explicit SKU presence.
+  * Enhanced `validateSkuUniqueness` and `validateBarcodeUniqueness` to detect collisions across base products, variants, and packaging units.
+  * Replaced `any` casts with explicit type guards (`isCanonicalProduct`, `hasCanonicalProduct`) and property-existence checks.
+
+---
+
+## 3. Verification & Automated Test Suite
+
+| Test Suite | Target File | Tests | Pass / Fail |
+|---|---|---|---|
+| **Product Domain Boundary & SKU Architecture** | `tests/product-domain.test.ts` | **30 / 30** | **PASS (0 fail)** |
+| **Firestore Authorization & Security Rules** | `tests/authorization.test.ts` | **79 / 79** | **PASS (0 fail)** |
+| **Total Automated Regression Suite** | `npm test` | **109 / 109** | **PASS (0 fail)** |
+| **Static Type Checking** | `npm run lint` (`tsc --noEmit`) | Clean | **PASS (0 errors)** |
+| **Production Application Build** | `npm run build` (`vite build`) | Clean | **PASS (0 errors)** |
+
+---
+
+## 4. Scope Discipline
+
+* **No INV-001 Leakage**: Physical inventory ledgers, multi-location stock allocations, lot rotation (FIFO/FEFO), and stock movement logs have NOT been introduced.
+* **Transitional Stock Dependency**: Temporary operational stock calculation is strictly contained behind the projection boundary and is never leaked to public consumers.
+
+---
+
+**PROD-001-F2 CORRECTION COMPLETE — READY FOR SUPERVISOR REVIEW**
 
 

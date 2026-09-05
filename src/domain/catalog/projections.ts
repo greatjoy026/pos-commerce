@@ -8,5 +8,6 @@
 
 export {
   toPublicCatalogProjection,
-  toPOSProductView
+  toPOSProductView,
+  computePublicAvailabilityStatus
 } from '../product/projections';

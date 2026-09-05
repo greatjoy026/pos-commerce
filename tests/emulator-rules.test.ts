@@ -61,7 +61,7 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         name: 'Enterprise Barcode Scanner',
         sku: 'SCAN-100',
         price: 299.99,
-        stock: 50,
+        availability: { status: 'IN_STOCK' },
         category: 'Hardware',
         publishOnline: true
       });
@@ -516,7 +516,7 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         name: 'Laser Thermal Printer',
         sku: 'PRINT-200',
         price: 189.00,
-        stock: 25,
+        availability: { status: 'IN_STOCK' },
         category: 'Printers'
       }));
     });
@@ -639,15 +639,24 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       }));
     });
 
-    it('Rejects injection of sensitive cost fields into public_products projection', async () => {
+    it('Rejects injection of sensitive cost and operational stock fields into public_products projection', async () => {
       const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
-      await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-leak'), {
-        id: 'prod-leak',
-        name: 'Leaky Product',
+      // Leaking cost
+      await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-leak-cost'), {
+        id: 'prod-leak-cost',
+        name: 'Leaky Cost Product',
         sku: 'LEAK-01',
         price: 50.00,
         cost: 15.00, // VIOLATION: cost is forbidden on public projection!
-        stock: 10,
+        category: 'Test'
+      }));
+      // Leaking operational stock
+      await assertFails(setDoc(doc(invMgr, 'public_products', 'prod-leak-stock'), {
+        id: 'prod-leak-stock',
+        name: 'Leaky Stock Product',
+        sku: 'LEAK-02',
+        price: 50.00,
+        stock: 10, // VIOLATION: exact stock is forbidden on public projection!
         category: 'Test'
       }));
     });

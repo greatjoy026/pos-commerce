@@ -12,8 +12,18 @@
  * stock balances, or inventory valuations.
  */
 
-import { CanonicalProduct, CanonicalVariant, PackagingUnitInfo, ProductSku, SkuType } from './types';
+import {
+  CanonicalProduct,
+  CanonicalVariant,
+  PackagingUnitInfo,
+  ProductSku,
+  SkuType,
+  LegacyProductInput,
+  LegacyVariantInput,
+  LegacyPackagingUnitInput
+} from './types';
 import { Product } from '../../types';
+import { hasCanonicalProduct, isCanonicalProduct } from './projections';
 
 export interface SkuResolutionResult {
   found: boolean;
@@ -45,11 +55,13 @@ export function resolveProductSku(
   if (!product || !identifier) return null;
 
   const query = identifier.trim().toLowerCase();
-  const canonical: CanonicalProduct | undefined = (product as any).canonical || ('merchandising' in product ? (product as CanonicalProduct) : undefined);
-  const raw = product as any;
+  const canonical: CanonicalProduct | undefined = hasCanonicalProduct(product)
+    ? product.canonical
+    : (isCanonicalProduct(product) ? product : undefined);
+  const raw: LegacyProductInput = product as unknown as LegacyProductInput;
 
   const productId = product.id;
-  const productName = canonical ? canonical.merchandising.name : raw.name;
+  const productName = canonical ? canonical.merchandising.name : (raw.name || '');
   const basePrice = typeof raw.price === 'number'
     ? raw.price
     : (canonical?.variants.find(v => v.isDefault)?.pricing.retailPrice ?? canonical?.variants[0]?.pricing.retailPrice ?? 0);
@@ -83,24 +95,29 @@ export function resolveProductSku(
   }
 
   // 3. Variant SKU & Barcode match
-  const variants: (CanonicalVariant | any)[] = canonical?.variants || raw.variants || [];
+  const variants: (CanonicalVariant | LegacyVariantInput)[] = canonical?.variants || raw.variants || [];
   for (const v of variants) {
     const vSku = (v.sku || '').trim().toLowerCase();
     const vBarcode = (v.barcode || '').trim().toLowerCase();
-    const vRetailPrice = v.pricing?.retailPrice ?? v.retailPrice ?? basePrice;
-    const variantName = v.name || [v.size, v.color, v.model].filter(Boolean).join(' / ') || v.sku;
+    const vRetailPrice = 'pricing' in v && v.pricing?.retailPrice !== undefined
+      ? v.pricing.retailPrice
+      : ('retailPrice' in v && typeof v.retailPrice === 'number' ? v.retailPrice : basePrice);
+    const vSize = 'attributes' in v && v.attributes?.size ? v.attributes.size : ('size' in v ? v.size : undefined);
+    const vColor = 'attributes' in v && v.attributes?.color ? v.attributes.color : ('color' in v ? v.color : undefined);
+    const vModel = 'attributes' in v && v.attributes?.model ? v.attributes.model : ('model' in v ? v.model : undefined);
+    const variantName = v.name || [vSize, vColor, vModel].filter(Boolean).join(' / ') || v.sku || '';
 
     if (vSku && vSku === query) {
       return {
         found: true,
         matchType: 'variant_sku',
-        sku: v.sku,
+        sku: v.sku || '',
         barcode: v.barcode,
         price: vRetailPrice,
         sellableName: `${productName} (${variantName})`,
         productId,
         variantId: v.id,
-        variant: v
+        variant: 'pricing' in v ? (v as CanonicalVariant) : undefined
       };
     }
 
@@ -108,39 +125,45 @@ export function resolveProductSku(
       return {
         found: true,
         matchType: 'variant_barcode',
-        sku: v.sku,
+        sku: v.sku || '',
         barcode: v.barcode,
         price: vRetailPrice,
         sellableName: `${productName} (${variantName})`,
         productId,
         variantId: v.id,
-        variant: v
+        variant: 'pricing' in v ? (v as CanonicalVariant) : undefined
       };
     }
   }
 
   // 4. Packaging Unit SKU / Barcode match
-  const packagingUnits: (PackagingUnitInfo | any)[] = canonical?.packagingUnits || raw.packagingUnits || raw.packaging?.packagingUnits || [];
+  const packagingUnits: (PackagingUnitInfo | LegacyPackagingUnitInput)[] =
+    canonical?.packagingUnits || raw.packagingUnits || raw.packaging?.packagingUnits || [];
   for (const unit of packagingUnits) {
     const uSku = (unit.sku || '').trim().toLowerCase();
     const uBarcode = (unit.barcode || '').trim().toLowerCase();
 
     if ((uSku && uSku === query) || (uBarcode && uBarcode === query)) {
-      const unitSku = unit.sku || (product.sku ? `${product.sku}-PKG-${unit.id}` : unit.id);
+      const unitId = unit.id || 'default-pkg';
+      const unitName = 'unitName' in unit && unit.unitName ? unit.unitName : ('name' in unit && unit.name ? unit.name : 'Packaging Unit');
+      const unitMultiplier = unit.multiplier || 1;
+      const sellingPrice = typeof unit.sellingPrice === 'number' ? unit.sellingPrice : basePrice;
+      const unitSku = unit.sku || (product.sku ? `${product.sku}-PKG-${unitId}` : unitId);
+
       return {
         found: true,
         matchType: 'packaging_unit',
         sku: unitSku,
         barcode: unit.barcode,
-        price: unit.sellingPrice,
-        sellableName: `${productName} (${unit.unitName})`,
+        price: sellingPrice,
+        sellableName: `${productName} (${unitName})`,
         productId,
-        packagingUnitId: unit.id,
+        packagingUnitId: unitId,
         packagingUnit: {
-          id: unit.id,
-          unitName: unit.unitName,
-          multiplier: unit.multiplier || 1,
-          sellingPrice: unit.sellingPrice
+          id: unitId,
+          unitName,
+          multiplier: unitMultiplier,
+          sellingPrice
         }
       };
     }
@@ -158,8 +181,10 @@ export function resolveProductSku(
  */
 export function extractAllProductSkus(product: Product | CanonicalProduct): ProductSku[] {
   const results: ProductSku[] = [];
-  const canonical: CanonicalProduct | undefined = (product as any).canonical || ('merchandising' in product ? (product as CanonicalProduct) : undefined);
-  const raw = product as any;
+  const canonical: CanonicalProduct | undefined = hasCanonicalProduct(product)
+    ? product.canonical
+    : (isCanonicalProduct(product) ? product : undefined);
+  const raw: LegacyProductInput = product as unknown as LegacyProductInput;
 
   const productId = product.id;
   const productName = canonical ? canonical.merchandising.name : (raw.name || '');
@@ -183,11 +208,23 @@ export function extractAllProductSkus(product: Product | CanonicalProduct): Prod
   }
 
   // 2. Variant SKUs
-  const variants: (CanonicalVariant | any)[] = canonical?.variants || raw.variants || [];
+  const variants: (CanonicalVariant | LegacyVariantInput)[] = canonical?.variants || raw.variants || [];
   for (const v of variants) {
     if (v.sku && !seenSkus.has(v.sku.toLowerCase())) {
-      const variantName = v.name || [v.size, v.color, v.model].filter(Boolean).join(' / ') || v.sku;
-      const vPrice = v.pricing?.retailPrice ?? v.retailPrice ?? basePrice;
+      const vSize = 'attributes' in v && v.attributes?.size ? v.attributes.size : ('size' in v ? v.size : undefined);
+      const vColor = 'attributes' in v && v.attributes?.color ? v.attributes.color : ('color' in v ? v.color : undefined);
+      const vModel = 'attributes' in v && v.attributes?.model ? v.attributes.model : ('model' in v ? v.model : undefined);
+      const variantName = v.name || [vSize, vColor, vModel].filter(Boolean).join(' / ') || v.sku;
+      const vPrice = 'pricing' in v && v.pricing?.retailPrice !== undefined
+        ? v.pricing.retailPrice
+        : ('retailPrice' in v && typeof v.retailPrice === 'number' ? v.retailPrice : basePrice);
+
+      const attributes = 'attributes' in v && v.attributes
+        ? v.attributes
+        : {
+            ...(vSize ? { size: vSize } : {}),
+            ...(vColor ? { color: vColor } : {})
+          };
 
       results.push({
         sku: v.sku,
@@ -197,28 +234,29 @@ export function extractAllProductSkus(product: Product | CanonicalProduct): Prod
         skuType: 'variant',
         sellableName: `${productName} (${variantName})`,
         price: vPrice,
-        attributes: v.attributes || {
-          ...(v.size ? { size: v.size } : {}),
-          ...(v.color ? { color: v.color } : {})
-        }
+        attributes
       });
       seenSkus.add(v.sku.toLowerCase());
     }
   }
 
   // 3. Packaging SKUs
-  const packagingUnits: (PackagingUnitInfo | any)[] = canonical?.packagingUnits || raw.packagingUnits || raw.packaging?.packagingUnits || [];
+  const packagingUnits: (PackagingUnitInfo | LegacyPackagingUnitInput)[] =
+    canonical?.packagingUnits || raw.packagingUnits || raw.packaging?.packagingUnits || [];
   for (const unit of packagingUnits) {
-    const pkgSku = unit.sku ? unit.sku.trim() : undefined;
+    const pkgSku = unit.sku ? unit.sku.trim() : (unit.id ? (product.sku ? `${product.sku}-PKG-${unit.id}` : unit.id) : undefined);
     if (pkgSku && !seenSkus.has(pkgSku.toLowerCase())) {
+      const unitName = 'unitName' in unit && unit.unitName ? unit.unitName : ('name' in unit && unit.name ? unit.name : 'Packaging Unit');
+      const unitPrice = typeof unit.sellingPrice === 'number' ? unit.sellingPrice : basePrice;
+
       results.push({
         sku: pkgSku,
-        barcode: unit.barcode,
+        barcode: unit.barcode ? String(unit.barcode).trim() : undefined,
         productId,
         packagingUnitId: unit.id,
         skuType: 'packaging',
-        sellableName: `${productName} (${unit.unitName})`,
-        price: unit.sellingPrice
+        sellableName: `${productName} (${unitName})`,
+        price: unitPrice
       });
       seenSkus.add(pkgSku.toLowerCase());
     }

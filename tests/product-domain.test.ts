@@ -36,6 +36,7 @@ import {
   validateSkuUniqueness,
   validateBarcodeUniqueness,
   toPublicCatalogProjection,
+  computePublicAvailabilityStatus,
   toPOSProductView,
   generateCanonicalSku
 } from '../src/domain/product';
@@ -122,6 +123,7 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
         sku: 'BV-EN-01',
         price: 2.50,
         stock: 120,
+        category: 'Beverages',
         packagingUnits: [
           { id: 'u1', unitName: 'Single Can', multiplier: 1, baseUnit: 'Can', sellingPrice: 2.50, barcode: '990001' },
           { id: 'u2', unitName: '6-Pack Box', multiplier: 6, baseUnit: 'Can', sellingPrice: 13.50, barcode: '990006', sku: 'BV-EN-01-6PK' }
@@ -182,6 +184,7 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
         name: 'Duplicate SKU Shirt',
         sku: 'SHIRT-01',
         price: 30.00,
+        category: 'Apparel',
         variants: [
           { sku: 'SHIRT-01-RED', size: 'M', color: 'Red' },
           { sku: 'SHIRT-01-RED', size: 'L', color: 'Red' } // Duplicate!
@@ -199,6 +202,98 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
         ProductNormalizationError
       );
     });
+
+    it('rejects packaging units with non-positive or invalid multiplier (PROD-001-F2)', () => {
+      const rawZeroMultiplier = {
+        id: 'prod-pack-zero',
+        name: 'Zero Multiplier Juice',
+        sku: 'JC-001',
+        price: 3.00,
+        category: 'Beverages',
+        packagingUnits: [
+          { id: 'u0', unitName: 'Invalid Pack', multiplier: 0, sellingPrice: 10.00 }
+        ]
+      };
+
+      const resZero = tryNormalizeProduct(rawZeroMultiplier);
+      assert.equal(resZero.success, false);
+      if (!resZero.success) {
+        assert.ok(resZero.errors.some(e => e.message.includes('must be a positive number')));
+      }
+
+      const rawNegativeMultiplier = {
+        id: 'prod-pack-neg',
+        name: 'Negative Multiplier Juice',
+        sku: 'JC-002',
+        price: 3.00,
+        category: 'Beverages',
+        packagingUnits: [
+          { id: 'u-neg', unitName: 'Negative Pack', multiplier: -6, sellingPrice: 15.00 }
+        ]
+      };
+
+      const resNeg = tryNormalizeProduct(rawNegativeMultiplier);
+      assert.equal(resNeg.success, false);
+      if (!resNeg.success) {
+        assert.ok(resNeg.errors.some(e => e.message.includes('must be a positive number')));
+      }
+    });
+
+    it('rejects packaging units with negative selling price (PROD-001-F2)', () => {
+      const rawNegPrice = {
+        id: 'prod-pack-neg-price',
+        name: 'Negative Price Pack',
+        sku: 'PK-NEG-01',
+        price: 5.00,
+        category: 'Snacks',
+        packagingUnits: [
+          { id: 'u-bad', unitName: 'Bad Price Box', multiplier: 12, sellingPrice: -20.00 }
+        ]
+      };
+
+      const res = tryNormalizeProduct(rawNegPrice);
+      assert.equal(res.success, false);
+      if (!res.success) {
+        assert.ok(res.errors.some(e => e.message.includes('cannot be negative')));
+      }
+    });
+
+    it('rejects input with missing category without inventing silent defaults (PROD-001-F2)', () => {
+      const rawNoCategory = {
+        id: 'prod-no-cat',
+        name: 'Uncategorized Gadget',
+        sku: 'GADGET-01',
+        price: 49.99
+      };
+
+      const result = tryNormalizeProduct(rawNoCategory);
+      assert.equal(result.success, false);
+      if (!result.success) {
+        assert.ok(result.errors.some(e => e.field === 'category'));
+      }
+
+      assert.throws(
+        () => normalizeProduct(rawNoCategory),
+        ProductNormalizationError
+      );
+    });
+
+    it('defaults rating to 0 (unrated) and lifecycle status to Draft when omitted (PROD-001-F2)', () => {
+      const rawDefaults = {
+        id: 'prod-def-01',
+        name: 'Brand New Item',
+        sku: 'NEW-ITEM-01',
+        price: 19.99,
+        category: 'General Goods'
+      };
+
+      const canonical = normalizeProduct(rawDefaults);
+      // Rating must default to 0 (unrated), NOT 5.0
+      assert.equal(canonical.merchandising.rating, 0);
+      assert.equal(canonical.merchandising.reviewCount, 0);
+      // Status must default to 'Draft' for conservative inventory safety, NOT 'Active'
+      assert.equal(canonical.lifecycle.status, 'Draft');
+    });
   });
 
   describe('3. Legacy Compatibility Adapters', () => {
@@ -210,6 +305,7 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
         price: 120.00,
         cost: 50.00,
         stock: 35,
+        category: 'Footwear',
         location: 'Warehouse B',
         reorderPoint: 5
       };
@@ -236,7 +332,8 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
         sku: 'WT-SMART-01',
         price: 250.00,
         cost: 110.00,
-        stock: 20
+        stock: 20,
+        category: 'Electronics'
       };
 
       const legacy = normalizeToLegacyProduct(raw);
@@ -256,6 +353,7 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
       price: 79.99,
       cost: 35.00,
       stock: 30,
+      category: 'Electronics',
       variants: [
         { sku: 'EL-GM-100-BLK', color: 'Matte Black', stock: 18, retailPrice: 79.99, costPrice: 35.00, barcode: '880011223366' },
         { sku: 'EL-GM-100-WHT', color: 'White', stock: 12, retailPrice: 84.99, costPrice: 37.00, barcode: '880011223355' }
@@ -369,16 +467,21 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
         id: 'p1',
         name: 'Product 1',
         sku: 'CAT-001',
+        category: 'Hardware',
         price: 10,
         variants: [
           { sku: 'CAT-001-A', retailPrice: 10 },
           { sku: 'CAT-001-B', retailPrice: 10 }
+        ],
+        packagingUnits: [
+          { id: 'u1', unitName: '10-Pack Box', multiplier: 10, sellingPrice: 90, sku: 'CAT-001-BOX', barcode: '770099' }
         ]
       }),
       normalizeProduct({
         id: 'p2',
         name: 'Product 2',
         sku: 'CAT-002',
+        category: 'Hardware',
         price: 20
       })
     ];
@@ -391,20 +494,38 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
       assert.equal(validateSkuUniqueness(catalog, 'CAT-001', 'p1'), true);
     });
 
-    it('validates barcode uniqueness across catalog', () => {
+    it('detects cross-type SKU collisions across base, variant, and packaging units (PROD-001-F2)', () => {
+      // Base vs Variant collision
+      assert.equal(validateSkuUniqueness(catalog, 'CAT-001-A'), false, 'Variant SKU must collide');
+      // Variant vs Packaging collision
+      assert.equal(validateSkuUniqueness(catalog, 'CAT-001-BOX'), false, 'Packaging SKU must collide');
+      // Case insensitive check on packaging unit SKU
+      assert.equal(validateSkuUniqueness(catalog, 'cat-001-box'), false, 'Packaging SKU case-insensitive collision');
+    });
+
+    it('validates barcode uniqueness across catalog including packaging units (PROD-001-F2)', () => {
       const catalogWithBarcodes = [
         normalizeProduct({
           id: 'p1',
           name: 'Item 1',
           sku: 'BAR-001',
+          category: 'Hardware',
           barcode: '770001',
-          price: 10
+          price: 10,
+          variants: [
+            { sku: 'BAR-001-V', barcode: '770002', retailPrice: 10 }
+          ],
+          packagingUnits: [
+            { id: 'pu1', unitName: 'Case', multiplier: 24, sellingPrice: 200, barcode: '770003' }
+          ]
         })
       ];
 
-      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770001'), false);
-      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770002'), true);
-      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770001', 'p1'), true);
+      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770001'), false, 'Base barcode collides');
+      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770002'), false, 'Variant barcode collides');
+      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770003'), false, 'Packaging barcode collides');
+      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770999'), true, 'Unused barcode is unique');
+      assert.equal(validateBarcodeUniqueness(catalogWithBarcodes, '770001', 'p1'), true, 'Self barcode excluded');
     });
 
     it('generates canonical SKUs with standardized format', () => {
@@ -445,10 +566,13 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
       assert.equal(publicProjection.name, 'Enterprise Security Router');
       assert.equal(publicProjection.sku, 'NET-RTR-01');
       assert.equal(publicProjection.price, 499.99);
-      assert.equal(publicProjection.stock, 50);
+
+      // CRITICAL DOMAIN BOUNDARY (PROD-001-F2): Stock MUST NOT be exposed in public projection!
+      const raw = publicProjection as unknown as Record<string, unknown>;
+      assert.equal('stock' in raw, false, 'stock leaked into public projection root');
+      assert.equal(publicProjection.availability.status, 'IN_STOCK');
 
       // STRICT SECURITY ASSERTIONS: Forbidden internal fields MUST NOT exist
-      const raw = publicProjection as unknown as Record<string, unknown>;
       assert.equal('cost' in raw, false, 'cost leaked into public projection');
       assert.equal('costPrice' in raw, false, 'costPrice leaked into public projection');
       assert.equal('supplier' in raw, false, 'supplier leaked into public projection');
@@ -456,11 +580,29 @@ describe('PROD-001-F1 — Product Domain Boundary & SKU Architecture', () => {
       assert.equal('serialNumbers' in raw, false, 'serialNumbers leaked into public projection');
       assert.equal('batchNumber' in raw, false, 'batchNumber leaked into public projection');
 
-      // Check variant projection omits costPrice as well
+      // Check variant projection omits costPrice and stock as well
       assert.ok(publicProjection.variants);
       assert.equal(publicProjection.variants.length, 1);
       const varRaw = publicProjection.variants[0] as unknown as Record<string, unknown>;
       assert.equal('costPrice' in varRaw, false, 'variant costPrice leaked into public projection');
+      assert.equal('stock' in varRaw, false, 'variant stock leaked into public projection');
+      assert.equal(publicProjection.variants[0].availability.status, 'IN_STOCK');
+    });
+
+    it('computes public availability status correctly without leaking internal stock balances (PROD-001-F2)', () => {
+      // Out of stock
+      assert.equal(computePublicAvailabilityStatus(0), 'OUT_OF_STOCK');
+      assert.equal(computePublicAvailabilityStatus(-3), 'OUT_OF_STOCK');
+      assert.equal(computePublicAvailabilityStatus(NaN), 'OUT_OF_STOCK');
+
+      // Low stock (threshold default is 5)
+      assert.equal(computePublicAvailabilityStatus(1), 'LOW_STOCK');
+      assert.equal(computePublicAvailabilityStatus(3), 'LOW_STOCK');
+      assert.equal(computePublicAvailabilityStatus(5), 'LOW_STOCK');
+
+      // In stock
+      assert.equal(computePublicAvailabilityStatus(6), 'IN_STOCK');
+      assert.equal(computePublicAvailabilityStatus(100), 'IN_STOCK');
     });
   });
 

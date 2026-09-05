@@ -399,17 +399,28 @@ export interface Product {
   canonical?: CanonicalProduct;
 }
 
+export type PublicAvailabilityStatus = 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+
+export interface PublicAvailabilityInfo {
+  status: PublicAvailabilityStatus;
+}
+
+export interface PublicVariantProjection {
+  sku: string;
+  size?: string;
+  color?: string;
+  availability: PublicAvailabilityInfo;
+  retailPrice?: number;
+  imageUrl?: string;
+  isActive?: boolean;
+}
+
 export interface PublicProductProjection {
   id: string;
   name: string;
   sku: string;
   price: number;
-  stock: number;
-  availability?: {
-    inStock: boolean;
-    status: 'IN_STOCK' | 'OUT_OF_STOCK' | 'LOW_STOCK';
-    stock?: number;
-  };
+  availability: PublicAvailabilityInfo;
   category: string;
   imageUrl?: string;
   description?: string;
@@ -427,15 +438,7 @@ export interface PublicProductProjection {
   reviews?: ProductReview[];
   unit?: string;
   publishOnline?: boolean;
-  variants?: {
-    sku: string;
-    size?: string;
-    color?: string;
-    stock: number;
-    retailPrice?: number;
-    imageUrl?: string;
-    isActive?: boolean;
-  }[];
+  variants?: PublicVariantProjection[];
 }
 
 export interface Category {

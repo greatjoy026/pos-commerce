@@ -16,6 +16,8 @@
 import {
   CanonicalProduct,
   CanonicalVariant,
+  CanonicalProductType,
+  CanonicalProductStatus,
   PackagingUnitInfo,
   ProductClassification,
   ProductLifecycle,
@@ -87,6 +89,24 @@ export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
   const qrCode = raw.qrCode ? String(raw.qrCode).trim() : undefined;
 
   // 2. Merchandising
+  // AUDIT DECISION (PROD-001-F2):
+  // Safe structural defaults (images: [], specifications: {}, reviewCount: 0) remain.
+  // Business default audit: Never default rating to 5.0. An unrated product has rating 0.
+  let rating = 0;
+  if (typeof raw.rating === 'number') {
+    if (raw.rating < 0 || raw.rating > 5) {
+      errors.push({ field: 'rating', message: 'Rating must be a number between 0 and 5.' });
+    } else {
+      rating = raw.rating;
+    }
+  } else if (typeof raw.merchandising?.rating === 'number') {
+    if (raw.merchandising.rating < 0 || raw.merchandising.rating > 5) {
+      errors.push({ field: 'rating', message: 'Rating must be a number between 0 and 5.' });
+    } else {
+      rating = raw.merchandising.rating;
+    }
+  }
+
   const merchandising: ProductMerchandising = {
     name: rawName,
     description: String(raw.description || raw.merchandising?.description || ''),
@@ -94,7 +114,7 @@ export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
     model: raw.model || raw.merchandising?.model || undefined,
     imageUrl: raw.imageUrl || raw.merchandising?.imageUrl || raw.images?.[0] || undefined,
     images: Array.isArray(raw.images) ? raw.images : (raw.imageUrl ? [raw.imageUrl] : []),
-    rating: typeof raw.rating === 'number' ? raw.rating : (raw.merchandising?.rating ?? 5.0),
+    rating,
     reviewCount: typeof raw.reviewCount === 'number' ? raw.reviewCount : (raw.merchandising?.reviewCount ?? 0),
     specifications: raw.specifications || raw.merchandising?.specifications || {},
     isFeatured: Boolean(raw.isFeatured ?? raw.merchandising?.isFeatured),
@@ -105,17 +125,62 @@ export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
   };
 
   // 3. Classification
+  // AUDIT DECISION (PROD-001-F2):
+  // Category is a mandatory business classification. Normalization must NEVER silently
+  // assign 'General'. Creation-time UI forms may offer default suggestions, but persisted
+  // or incoming domain records must supply a non-empty category string.
+  const rawCategory = (raw.classification?.category || raw.category || '').trim();
+  if (!rawCategory) {
+    errors.push({ field: 'category', message: 'Product category is required and cannot be silently defaulted.' });
+  }
+
+  const VALID_PRODUCT_TYPES: CanonicalProductType[] = [
+    'Standard', 'Composite', 'Bundle', 'Service', 'Digital', 'Rental', 'Physical'
+  ];
+  const specifiedType = raw.classification?.productType || raw.productType;
+  let productType: CanonicalProductType = 'Standard';
+  if (specifiedType) {
+    if (VALID_PRODUCT_TYPES.includes(specifiedType as CanonicalProductType)) {
+      productType = specifiedType as CanonicalProductType;
+    } else {
+      errors.push({
+        field: 'productType',
+        message: `Invalid product type "${specifiedType}". Valid types are: ${VALID_PRODUCT_TYPES.join(', ')}.`
+      });
+    }
+  }
+
   const classification: ProductClassification = {
-    category: String(raw.category || raw.classification?.category || 'General').trim(),
-    productType: raw.productType || raw.classification?.productType || 'Standard',
+    category: rawCategory,
+    productType,
     tags: Array.isArray(raw.tags) ? raw.tags : (raw.classification?.tags || []),
     taxCategory: raw.taxCategory || raw.classification?.taxCategory,
     isTaxExempt: Boolean(raw.isTaxExempt || raw.classification?.isTaxExempt)
   };
 
   // 4. Lifecycle
+  // AUDIT DECISION (PROD-001-F2):
+  // Status must be one of 'Active', 'Draft', 'Archived'.
+  // If omitted, default to 'Draft' to prevent unverified products from silently being Active.
+  const VALID_STATUSES: CanonicalProductStatus[] = ['Active', 'Draft', 'Archived'];
+  const specifiedStatus = raw.lifecycle?.status || raw.status;
+  let status: CanonicalProductStatus = 'Draft';
+  if (specifiedStatus) {
+    if (VALID_STATUSES.includes(specifiedStatus as CanonicalProductStatus)) {
+      status = specifiedStatus as CanonicalProductStatus;
+    } else {
+      errors.push({
+        field: 'status',
+        message: `Invalid product status "${specifiedStatus}". Valid statuses are: ${VALID_STATUSES.join(', ')}.`
+      });
+    }
+  } else {
+    // Canonical default for omitted lifecycle status is 'Draft' (safe staging)
+    status = 'Draft';
+  }
+
   const lifecycle: ProductLifecycle = {
-    status: raw.status || raw.lifecycle?.status || 'Active',
+    status,
     visibility: {
       publishOnline: raw.publishOnline !== false && raw.lifecycle?.visibility?.publishOnline !== false,
       sellOnPOS: raw.sellOnPOS !== false && raw.lifecycle?.visibility?.sellOnPOS !== false,
@@ -213,37 +278,94 @@ export function tryNormalizeProduct(raw: unknown): TryNormalizeResult {
   }
 
   // 7. Packaging Units Consolidation (Catalog definition only, no inventory logic)
+  // ARCHITECTURAL RULE (PROD-001-F2):
+  // Silent packaging fallbacks are strictly FORBIDDEN.
+  // Multipliers <= 0 or negative prices MUST produce structured validation errors.
+  // Packaging units missing an explicit identifier MUST fail validation.
   const packagingUnits: PackagingUnitInfo[] = [];
 
   if (Array.isArray(raw.packagingUnits)) {
-    raw.packagingUnits.forEach((u: LegacyPackagingUnitInput) => {
-      if (u.unitName) {
+    raw.packagingUnits.forEach((u: LegacyPackagingUnitInput, index: number) => {
+      const uId = u.id ? String(u.id).trim() : '';
+      if (!uId) {
+        errors.push({
+          field: `packagingUnits[${index}].id`,
+          message: `Packaging unit at index ${index} is missing a required identifier.`
+        });
+      }
+
+      const uName = (u.unitName || u.name || '').trim();
+      if (!uName) {
+        errors.push({
+          field: `packagingUnits[${index}].unitName`,
+          message: `Packaging unit at index ${index} must have a valid unitName.`
+        });
+      }
+
+      if (typeof u.multiplier !== 'number' || isNaN(u.multiplier) || u.multiplier <= 0) {
+        errors.push({
+          field: `packagingUnits[${index}].multiplier`,
+          message: 'Packaging unit multiplier must be a positive number greater than 0.'
+        });
+      }
+
+      if (typeof u.sellingPrice === 'number' && u.sellingPrice < 0) {
+        errors.push({
+          field: `packagingUnits[${index}].sellingPrice`,
+          message: 'Selling price cannot be negative.'
+        });
+      }
+
+      if (uId && uName && typeof u.multiplier === 'number' && u.multiplier > 0) {
         packagingUnits.push({
-          id: u.id || `pkg-${u.unitName.toLowerCase().replace(/\s+/g, '-')}`,
-          unitName: u.unitName,
-          multiplier: typeof u.multiplier === 'number' && u.multiplier > 0 ? u.multiplier : 1,
+          id: uId,
+          unitName: uName,
+          multiplier: u.multiplier,
           baseUnit: u.base_unit || u.baseUnit || 'Piece',
           sellingPrice: typeof u.sellingPrice === 'number' ? u.sellingPrice : basePrice,
           barcode: u.barcode ? String(u.barcode).trim() : undefined,
           sku: u.sku ? String(u.sku).trim() : undefined,
           isDefaultSellingUnit: Boolean(u.isDefaultSellingUnit),
-          isPackUnit: Boolean(u.isPackUnit ?? (u.multiplier && u.multiplier > 1))
+          isPackUnit: Boolean(u.isPackUnit ?? (u.multiplier > 1))
         });
       }
     });
   } else if (raw.packaging?.sellingTiers && Array.isArray(raw.packaging.sellingTiers)) {
-    raw.packaging.sellingTiers.forEach((tier) => {
-      if (tier.name) {
+    raw.packaging.sellingTiers.forEach((tier, index: number) => {
+      const tierId = tier.id ? String(tier.id).trim() : '';
+      if (!tierId) {
+        errors.push({
+          field: `packaging.sellingTiers[${index}].id`,
+          message: `Selling tier at index ${index} is missing a required identifier.`
+        });
+      }
+
+      const tierName = (tier.name || '').trim();
+      if (!tierName) {
+        errors.push({
+          field: `packaging.sellingTiers[${index}].name`,
+          message: `Selling tier at index ${index} must have a valid name.`
+        });
+      }
+
+      if (typeof tier.unitQuantity !== 'number' || isNaN(tier.unitQuantity) || tier.unitQuantity <= 0) {
+        errors.push({
+          field: `packaging.sellingTiers[${index}].unitQuantity`,
+          message: 'Multiplier must be greater than 0.'
+        });
+      }
+
+      if (tierId && tierName && typeof tier.unitQuantity === 'number' && tier.unitQuantity > 0) {
         packagingUnits.push({
-          id: tier.id || `tier-${tier.unitQuantity}`,
-          unitName: tier.name,
-          multiplier: tier.unitQuantity && tier.unitQuantity > 0 ? tier.unitQuantity : 1,
+          id: tierId,
+          unitName: tierName,
+          multiplier: tier.unitQuantity,
           baseUnit: raw.packaging?.baseSellingUnitName || 'Piece',
           barcode: tier.barcode ? String(tier.barcode).trim() : undefined,
           sku: tier.sku ? String(tier.sku).trim() : undefined,
           sellingPrice: typeof tier.sellingPrice === 'number' ? tier.sellingPrice : basePrice,
           isDefaultSellingUnit: Boolean(tier.isDefaultSellingUnit),
-          isPackUnit: (tier.unitQuantity ?? 1) > 1
+          isPackUnit: tier.unitQuantity > 1
         });
       }
     });
@@ -291,18 +413,18 @@ export function toLegacyProduct(
   canonical: CanonicalProduct,
   legacyOperational?: Partial<ProductOperationalState & LegacyProductInput>
 ): Product & { canonical: CanonicalProduct } {
-  const op = legacyOperational || {};
+  const op: LegacyProductInput = (legacyOperational || {}) as LegacyProductInput;
   const basePrice = typeof op.price === 'number' && !isNaN(op.price) && op.price >= 0
     ? op.price
     : (canonical.variants[0]?.pricing.retailPrice ?? 0);
 
-  const rawVariants = Array.isArray(op.variants) ? op.variants : undefined;
+  const rawVariants: LegacyVariantInput[] | undefined = Array.isArray(op.variants) ? op.variants : undefined;
 
   // Extract operational state (Transitional)
   const stock = typeof op.stock === 'number' && !isNaN(op.stock) && op.stock >= 0
     ? op.stock
     : (rawVariants
-        ? rawVariants.reduce((sum, v) => sum + (Number((v as any).stock) || 0), 0)
+        ? rawVariants.reduce((sum, v) => sum + (typeof v.stock === 'number' ? v.stock : 0), 0)
         : 0);
 
   const cost = typeof op.cost === 'number' && !isNaN(op.cost) && op.cost >= 0
@@ -319,11 +441,11 @@ export function toLegacyProduct(
   const legacyVariants: ProductVariant[] = canonical.variants.map((v) => {
     // Find matching legacy variant for transitional stock
     const legacyMatch = rawVariants
-      ? rawVariants.find(lv => lv.sku === v.sku || (lv as any).id === v.id)
+      ? rawVariants.find(lv => lv.sku === v.sku || lv.id === v.id)
       : undefined;
 
-    const vStock = legacyMatch && typeof (legacyMatch as any).stock === 'number'
-      ? (legacyMatch as any).stock
+    const vStock = legacyMatch && typeof legacyMatch.stock === 'number'
+      ? legacyMatch.stock
       : (canonical.variants.length === 1 ? stock : 0);
 
     return {
@@ -369,7 +491,7 @@ export function toLegacyProduct(
     barcode: canonical.barcode || '',
     qrCode: canonical.qrCode || '',
     variants: legacyVariants,
-    salesCount: typeof (op as any).salesCount === 'number' ? (op as any).salesCount : 0,
+    salesCount: typeof op.salesCount === 'number' ? op.salesCount : 0,
     imageUrl: canonical.merchandising.imageUrl,
     images: canonical.merchandising.images,
     description: canonical.merchandising.description,
@@ -378,7 +500,7 @@ export function toLegacyProduct(
     rating: canonical.merchandising.rating,
     reviewCount: canonical.merchandising.reviewCount,
     specifications: canonical.merchandising.specifications,
-    reviews: (op as any).reviews,
+    reviews: op.reviews,
     isFeatured: canonical.merchandising.isFeatured,
     isNewArrival: canonical.merchandising.isNewArrival,
     isBestSeller: canonical.merchandising.isBestSeller,
