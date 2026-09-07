@@ -19,7 +19,7 @@ import {
 import { CanonicalProduct } from '../product/types';
 import { Product, ProductVariant } from '../../types';
 import { toLegacyProduct } from '../product/normalization';
-import { assertValidInventoryRecord } from './validation';
+import { assertValidInventoryRecord, InventoryDomainError } from './validation';
 
 export interface CreateInventoryParams {
   id?: string;
@@ -36,6 +36,34 @@ export interface CreateInventoryParams {
   serialNumbers?: string[];
   batchNumber?: string;
   expiryDate?: string;
+}
+
+/**
+ * Migration Policy Helper: Parses and validates legacy stock values.
+ *
+ * MIGRATION POLICY:
+ * - Missing legacy stock (undefined or null): Allowed and defaults to 0.
+ * - Invalid legacy stock (NaN, Infinity, -Infinity, negative numbers, non-numeric):
+ *   Throws an explicit InventoryDomainError. Never silently coerces to zero.
+ */
+export function parseLegacyStock(stock: unknown, context: string): number {
+  if (stock === undefined || stock === null) {
+    // Documented migration policy: missing legacy stock defaults to 0
+    return 0;
+  }
+  if (typeof stock !== 'number' || !Number.isFinite(stock)) {
+    throw new InventoryDomainError(
+      `Legacy migration failed for ${context}: stock must be a finite number or omitted, received ${String(stock)}`,
+      [{ field: `${context}.stock`, message: `Invalid legacy stock value: ${String(stock)}`, code: 'INVALID_TYPE' }]
+    );
+  }
+  if (stock < 0) {
+    throw new InventoryDomainError(
+      `Legacy migration failed for ${context}: stock cannot be negative, received ${stock}`,
+      [{ field: `${context}.stock`, message: `Negative legacy stock value: ${stock}`, code: 'OUT_OF_RANGE' }]
+    );
+  }
+  return stock;
 }
 
 /**
@@ -85,6 +113,12 @@ export function createInventoryRecord(params: CreateInventoryParams): InventoryR
  *     ├── Variant A -> SKU A -> InventoryRecord A
  *     ├── Variant B -> SKU B -> InventoryRecord B
  *     └── Variant C -> SKU C -> InventoryRecord C
+ *
+ * VARIANT IDENTITY ARCHITECTURE (INV-001-F1):
+ * In the legacy ProductVariant model, only `sku` was defined without a dedicated primary `id`.
+ * We strictly DO NOT invent a fake variant ID or set `variantId = variant.sku`.
+ * If an explicit `id` exists on the legacy variant object, it is used; otherwise `variantId`
+ * is left undefined to preserve architectural integrity.
  */
 export function createInventoryRecordsFromLegacyProduct(
   product: Product,
@@ -104,16 +138,22 @@ export function createInventoryRecordsFromLegacyProduct(
     : 'QUANTITY';
 
   if (Array.isArray(product.variants) && product.variants.length > 0) {
-    for (const variant of product.variants) {
+    for (let i = 0; i < product.variants.length; i++) {
+      const variant = product.variants[i];
       if (variant.sku && variant.sku.trim().length > 0) {
-        const vStock = typeof variant.stock === 'number' && Number.isFinite(variant.stock) && variant.stock >= 0
-          ? variant.stock
-          : 0;
+        const rawStock = parseLegacyStock(variant.stock, `product(${product.id}).variants[${i}]`);
+        const vStock = trackingMode === 'NONE' ? 0 : rawStock;
+
+        // Extract genuine variant ID if present on legacy object; NEVER use SKU as variant ID
+        const rawVariant = variant as unknown as Record<string, unknown>;
+        const genuineVariantId = (typeof rawVariant.id === 'string' && rawVariant.id.trim().length > 0)
+          ? rawVariant.id.trim()
+          : undefined;
 
         records.push(createInventoryRecord({
           sku: variant.sku,
           productId: product.id,
-          variantId: variant.sku,
+          variantId: genuineVariantId,
           locationId: location,
           quantityOnHand: vStock,
           quantityReserved: 0,
@@ -127,9 +167,8 @@ export function createInventoryRecordsFromLegacyProduct(
 
   // If no variant records were generated, generate for base SKU
   if (records.length === 0) {
-    const baseStock = typeof product.stock === 'number' && Number.isFinite(product.stock) && product.stock >= 0
-      ? product.stock
-      : 0;
+    const rawStock = parseLegacyStock(product.stock, `product(${product.id})`);
+    const baseStock = trackingMode === 'NONE' ? 0 : rawStock;
 
     records.push(createInventoryRecord({
       sku: product.sku,
@@ -140,9 +179,56 @@ export function createInventoryRecordsFromLegacyProduct(
       reorderPoint: typeof product.reorderPoint === 'number' && product.reorderPoint >= 0 ? product.reorderPoint : undefined,
       trackingMode,
       status: 'ACTIVE',
-      serialNumbers: product.serialNumbers,
-      batchNumber: product.batchNumber,
-      expiryDate: product.expiryDate
+      serialNumbers: trackingMode === 'SERIAL' ? product.serialNumbers : undefined,
+      batchNumber: trackingMode === 'BATCH' ? product.batchNumber : undefined,
+      expiryDate: trackingMode === 'BATCH' ? product.expiryDate : undefined
+    }));
+  }
+
+  return records;
+}
+
+/**
+ * Creates canonical InventoryRecord(s) from a CanonicalProduct.
+ * Demonstrates the full authoritative domain hierarchy:
+ *   Product ID
+ *       ↓
+ *   Variant ID (CanonicalVariant.id)
+ *       ↓
+ *   SKU (CanonicalVariant.sku)
+ *       ↓
+ *   Inventory Record
+ */
+export function createInventoryRecordsFromCanonicalProduct(
+  canonical: CanonicalProduct,
+  defaultLocationId: string = DEFAULT_LOCATION_ID,
+  initialStock: number = 0
+): InventoryRecord[] {
+  const records: InventoryRecord[] = [];
+
+  if (Array.isArray(canonical.variants) && canonical.variants.length > 0) {
+    for (const variant of canonical.variants) {
+      records.push(createInventoryRecord({
+        sku: variant.sku,
+        productId: canonical.id,
+        variantId: variant.id, // Genuine CanonicalVariant ID distinct from SKU!
+        locationId: defaultLocationId,
+        quantityOnHand: initialStock,
+        quantityReserved: 0,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      }));
+    }
+  } else {
+    records.push(createInventoryRecord({
+      sku: canonical.sku,
+      productId: canonical.id,
+      variantId: undefined, // Simple single-SKU product has no variant
+      locationId: defaultLocationId,
+      quantityOnHand: initialStock,
+      quantityReserved: 0,
+      trackingMode: 'QUANTITY',
+      status: 'ACTIVE'
     }));
   }
 

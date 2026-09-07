@@ -161,6 +161,177 @@ export function validateInventoryRecord(input: unknown): InventoryValidationResu
     });
   }
 
+  // 12. CreatedAt validation (Required ISO date string)
+  if (typeof raw.createdAt !== 'string' || raw.createdAt.trim().length === 0) {
+    errors.push({ field: 'createdAt', message: 'createdAt is required and must be a non-empty string', code: 'REQUIRED' });
+  } else if (isNaN(Date.parse(raw.createdAt))) {
+    errors.push({ field: 'createdAt', message: 'createdAt must be a valid ISO date timestamp string', code: 'INVALID_TYPE' });
+  }
+
+  // 13. UpdatedAt validation (Required ISO date string)
+  if (typeof raw.updatedAt !== 'string' || raw.updatedAt.trim().length === 0) {
+    errors.push({ field: 'updatedAt', message: 'updatedAt is required and must be a non-empty string', code: 'REQUIRED' });
+  } else if (isNaN(Date.parse(raw.updatedAt))) {
+    errors.push({ field: 'updatedAt', message: 'updatedAt must be a valid ISO date timestamp string', code: 'INVALID_TYPE' });
+  }
+
+  // 14. Tracking Mode Field Semantics & Contradiction Enforcements
+  const trackingMode = raw.trackingMode as InventoryTrackingMode;
+
+  if (trackingMode === 'NONE') {
+    // Non-stocked services / digital goods must not hold physical stock
+    if (typeof raw.quantityOnHand === 'number' && raw.quantityOnHand > 0) {
+      errors.push({
+        field: 'quantityOnHand',
+        message: 'Non-stocked inventory (trackingMode: NONE) cannot have quantityOnHand > 0',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+    if (typeof raw.quantityReserved === 'number' && raw.quantityReserved > 0) {
+      errors.push({
+        field: 'quantityReserved',
+        message: 'Non-stocked inventory (trackingMode: NONE) cannot have quantityReserved > 0',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+    if (raw.serialNumbers !== undefined) {
+      errors.push({
+        field: 'serialNumbers',
+        message: 'serialNumbers cannot be provided when trackingMode is NONE',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+    if (raw.batchNumber !== undefined) {
+      errors.push({
+        field: 'batchNumber',
+        message: 'batchNumber cannot be provided when trackingMode is NONE',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+    if (raw.expiryDate !== undefined) {
+      errors.push({
+        field: 'expiryDate',
+        message: 'expiryDate cannot be provided when trackingMode is NONE',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+  } else if (trackingMode === 'QUANTITY') {
+    // Standard quantity bulk/unit inventory
+    if (raw.serialNumbers !== undefined) {
+      errors.push({
+        field: 'serialNumbers',
+        message: 'serialNumbers cannot be provided when trackingMode is QUANTITY',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+    if (raw.batchNumber !== undefined) {
+      errors.push({
+        field: 'batchNumber',
+        message: 'batchNumber cannot be provided when trackingMode is QUANTITY',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+    if (raw.expiryDate !== undefined) {
+      errors.push({
+        field: 'expiryDate',
+        message: 'expiryDate cannot be provided when trackingMode is QUANTITY',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+  } else if (trackingMode === 'SERIAL') {
+    // Individual piece tracking with serial numbers
+    if (raw.batchNumber !== undefined) {
+      errors.push({
+        field: 'batchNumber',
+        message: 'batchNumber cannot be provided when trackingMode is SERIAL',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+    if (raw.expiryDate !== undefined) {
+      errors.push({
+        field: 'expiryDate',
+        message: 'expiryDate cannot be provided when trackingMode is SERIAL',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+
+    if (raw.serialNumbers !== undefined) {
+      if (!Array.isArray(raw.serialNumbers)) {
+        errors.push({
+          field: 'serialNumbers',
+          message: 'serialNumbers must be an array of strings',
+          code: 'INVALID_TYPE'
+        });
+      } else {
+        const seenSerials = new Set<string>();
+        let hasInvalidElement = false;
+
+        for (let i = 0; i < raw.serialNumbers.length; i++) {
+          const sn = raw.serialNumbers[i];
+          if (typeof sn !== 'string' || sn.trim().length === 0) {
+            hasInvalidElement = true;
+            errors.push({
+              field: `serialNumbers[${i}]`,
+              message: `serialNumber at index ${i} must be a non-empty string`,
+              code: 'INVALID_TYPE'
+            });
+          } else {
+            const trimmed = sn.trim();
+            if (seenSerials.has(trimmed.toUpperCase())) {
+              errors.push({
+                field: `serialNumbers[${i}]`,
+                message: `Duplicate serial number '${trimmed}' found in serialNumbers`,
+                code: 'INVARIANT_VIOLATION'
+              });
+            }
+            seenSerials.add(trimmed.toUpperCase());
+          }
+        }
+      }
+    }
+  } else if (trackingMode === 'BATCH') {
+    // Batch/lot tracking with expiration date
+    if (raw.serialNumbers !== undefined) {
+      errors.push({
+        field: 'serialNumbers',
+        message: 'serialNumbers cannot be provided when trackingMode is BATCH',
+        code: 'INVARIANT_VIOLATION'
+      });
+    }
+
+    if (raw.batchNumber !== undefined) {
+      if (typeof raw.batchNumber !== 'string') {
+        errors.push({
+          field: 'batchNumber',
+          message: 'batchNumber must be a string',
+          code: 'INVALID_TYPE'
+        });
+      } else if (raw.batchNumber.trim().length === 0) {
+        errors.push({
+          field: 'batchNumber',
+          message: 'batchNumber cannot be an empty string',
+          code: 'OUT_OF_RANGE'
+        });
+      }
+    }
+
+    if (raw.expiryDate !== undefined) {
+      if (typeof raw.expiryDate !== 'string') {
+        errors.push({
+          field: 'expiryDate',
+          message: 'expiryDate must be a string',
+          code: 'INVALID_TYPE'
+        });
+      } else if (raw.expiryDate.trim().length === 0 || isNaN(Date.parse(raw.expiryDate))) {
+        errors.push({
+          field: 'expiryDate',
+          message: 'expiryDate must be a valid ISO date string',
+          code: 'INVALID_TYPE'
+        });
+      }
+    }
+  }
+
   if (errors.length > 0) {
     return { isValid: false, errors };
   }
@@ -177,11 +348,11 @@ export function validateInventoryRecord(input: unknown): InventoryValidationResu
     reorderQuantity: raw.reorderQuantity !== undefined ? (raw.reorderQuantity as number) : undefined,
     trackingMode: raw.trackingMode as InventoryTrackingMode,
     status: raw.status as InventoryStatus,
-    serialNumbers: Array.isArray(raw.serialNumbers) ? (raw.serialNumbers as string[]) : undefined,
-    batchNumber: typeof raw.batchNumber === 'string' ? raw.batchNumber : undefined,
-    expiryDate: typeof raw.expiryDate === 'string' ? raw.expiryDate : undefined,
-    createdAt: typeof raw.createdAt === 'string' && raw.createdAt ? raw.createdAt : new Date().toISOString(),
-    updatedAt: typeof raw.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : new Date().toISOString()
+    serialNumbers: Array.isArray(raw.serialNumbers) ? (raw.serialNumbers as string[]).map(s => s.trim()) : undefined,
+    batchNumber: typeof raw.batchNumber === 'string' ? raw.batchNumber.trim() : undefined,
+    expiryDate: typeof raw.expiryDate === 'string' ? raw.expiryDate.trim() : undefined,
+    createdAt: (raw.createdAt as string).trim(),
+    updatedAt: (raw.updatedAt as string).trim()
   };
 
   return { isValid: true, errors: [], record };
@@ -240,6 +411,15 @@ export function assertInventoryInvariants(record: InventoryRecord): void {
     throw new InventoryDomainError('Invariant 5 violated: Inventory must belong to a SKU', [
       { field: 'sku', message: 'Inventory record missing SKU reference', code: 'INVARIANT_VIOLATION' }
     ]);
+  }
+
+  // Tracking Mode Semantic Invariants
+  if (record.trackingMode === 'NONE') {
+    if (record.quantityOnHand !== 0 || record.quantityReserved !== 0) {
+      throw new InventoryDomainError('Tracking invariant violated: Non-stocked inventory (trackingMode: NONE) must have 0 quantities', [
+        { field: 'quantityOnHand', message: 'quantityOnHand must be 0 for trackingMode NONE', code: 'INVARIANT_VIOLATION' }
+      ]);
+    }
   }
 }
 

@@ -156,21 +156,27 @@
     },
     "inventoryRecord": {
       "title": "InventoryRecord",
-      "description": "Authoritative operational inventory state for an SKU at a location (INV-001)",
+      "description": "Authoritative operational inventory state for an SKU at a location (INV-001 / INV-001-F1)",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "sku": { "type": "string" },
         "productId": { "type": "string" },
+        "variantId": { "type": "string" },
         "locationId": { "type": "string" },
         "quantityOnHand": { "type": "number" },
         "quantityReserved": { "type": "number" },
         "trackingMode": { "type": "string" },
         "status": { "type": "string" },
         "reorderPoint": { "type": "number" },
-        "reorderQuantity": { "type": "number" }
+        "reorderQuantity": { "type": "number" },
+        "serialNumbers": { "type": "array" },
+        "batchNumber": { "type": "string" },
+        "expiryDate": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
       },
-      "required": ["id", "sku", "productId", "locationId", "quantityOnHand", "quantityReserved", "trackingMode", "status"]
+      "required": ["id", "sku", "productId", "locationId", "quantityOnHand", "quantityReserved", "trackingMode", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {

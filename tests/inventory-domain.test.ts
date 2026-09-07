@@ -23,8 +23,11 @@ import {
   assertCanonicalProductHasNoInventoryState,
   assertCanonicalVariantHasNoInventoryState,
   calculateAvailableQuantity,
+  getInventoryRecordKey,
   createInventoryRecord,
   createInventoryRecordsFromLegacyProduct,
+  createInventoryRecordsFromCanonicalProduct,
+  parseLegacyStock,
   toLegacyProductWithInventory,
   toOperationalInventoryProjection,
   toPublicAvailabilityFromInventory,
@@ -74,7 +77,7 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
         id: 'inv-tee-blk-m-loc-wh',
         sku: 'TSHIRT-BLK-M',
         productId: 'prod-apparel-1',
-        variantId: 'TSHIRT-BLK-M',
+        variantId: 'var-tee-blk-m-01',
         locationId: 'loc-warehouse-central',
         quantityOnHand: 100,
         quantityReserved: 12,
@@ -84,7 +87,7 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
 
       assert.strictEqual(record.id, 'inv-tee-blk-m-loc-wh');
       assert.strictEqual(record.sku, 'TSHIRT-BLK-M');
-      assert.strictEqual(record.variantId, 'TSHIRT-BLK-M');
+      assert.strictEqual(record.variantId, 'var-tee-blk-m-01');
       assert.strictEqual(record.locationId, 'loc-warehouse-central');
       assert.strictEqual(record.quantityOnHand, 100);
       assert.strictEqual(record.quantityReserved, 12);
@@ -135,8 +138,10 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       locationId: 'loc-test',
       quantityOnHand: 10,
       quantityReserved: 2,
-      trackingMode: 'QUANTITY',
-      status: 'ACTIVE'
+      trackingMode: 'QUANTITY' as const,
+      status: 'ACTIVE' as const,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      updatedAt: '2026-09-01T00:00:00.000Z'
     };
 
     it('rejects negative quantityOnHand', () => {
@@ -216,6 +221,128 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       assert.strictEqual(res.record?.quantityOnHand, 0);
       assert.strictEqual(res.record?.quantityReserved, 0);
     });
+
+    it('strictly requires valid createdAt timestamp (no silent generation)', () => {
+      const missingCreatedAt = { ...validBase, createdAt: undefined };
+      const res1 = validateInventoryRecord(missingCreatedAt);
+      assert.strictEqual(res1.isValid, false);
+      assert.ok(res1.errors.some(e => e.field === 'createdAt' && e.code === 'REQUIRED'));
+
+      const invalidCreatedAt = { ...validBase, createdAt: 'not-a-valid-date' };
+      const res2 = validateInventoryRecord(invalidCreatedAt);
+      assert.strictEqual(res2.isValid, false);
+      assert.ok(res2.errors.some(e => e.field === 'createdAt' && e.code === 'INVALID_TYPE'));
+    });
+
+    it('strictly requires valid updatedAt timestamp (no silent generation)', () => {
+      const missingUpdatedAt = { ...validBase, updatedAt: undefined };
+      const res1 = validateInventoryRecord(missingUpdatedAt);
+      assert.strictEqual(res1.isValid, false);
+      assert.ok(res1.errors.some(e => e.field === 'updatedAt' && e.code === 'REQUIRED'));
+
+      const invalidUpdatedAt = { ...validBase, updatedAt: 'not-a-valid-date' };
+      const res2 = validateInventoryRecord(invalidUpdatedAt);
+      assert.strictEqual(res2.isValid, false);
+      assert.ok(res2.errors.some(e => e.field === 'updatedAt' && e.code === 'INVALID_TYPE'));
+    });
+
+    it('enforces trackingMode === NONE semantics (non-stocked items have 0 stock and no serial/batch fields)', () => {
+      const validNone = {
+        ...validBase,
+        trackingMode: 'NONE' as const,
+        quantityOnHand: 0,
+        quantityReserved: 0
+      };
+      assert.strictEqual(validateInventoryRecord(validNone).isValid, true);
+
+      // Rejects quantityOnHand > 0 for NONE
+      const illegalOnHand = { ...validNone, quantityOnHand: 10 };
+      const res1 = validateInventoryRecord(illegalOnHand);
+      assert.strictEqual(res1.isValid, false);
+      assert.ok(res1.errors.some(e => e.field === 'quantityOnHand' && e.code === 'INVARIANT_VIOLATION'));
+
+      // Rejects quantityReserved > 0 for NONE
+      const illegalReserved = { ...validNone, quantityReserved: 5 };
+      const res2 = validateInventoryRecord(illegalReserved);
+      assert.strictEqual(res2.isValid, false);
+
+      // Rejects serialNumbers for NONE
+      const illegalSerials = { ...validNone, serialNumbers: ['SN-1'] };
+      assert.strictEqual(validateInventoryRecord(illegalSerials).isValid, false);
+
+      // Rejects batchNumber for NONE
+      const illegalBatch = { ...validNone, batchNumber: 'LOT-99' };
+      assert.strictEqual(validateInventoryRecord(illegalBatch).isValid, false);
+
+      // Rejects expiryDate for NONE
+      const illegalExpiry = { ...validNone, expiryDate: '2026-10-15T00:00:00.000Z' };
+      assert.strictEqual(validateInventoryRecord(illegalExpiry).isValid, false);
+    });
+
+    it('enforces trackingMode === QUANTITY semantics (no serialNumbers, batchNumber, or expiryDate)', () => {
+      const withSerials = { ...validBase, serialNumbers: ['SN-1'] };
+      assert.strictEqual(validateInventoryRecord(withSerials).isValid, false);
+
+      const withBatch = { ...validBase, batchNumber: 'BATCH-1' };
+      assert.strictEqual(validateInventoryRecord(withBatch).isValid, false);
+
+      const withExpiry = { ...validBase, expiryDate: '2026-10-15T00:00:00.000Z' };
+      assert.strictEqual(validateInventoryRecord(withExpiry).isValid, false);
+    });
+
+    it('enforces trackingMode === SERIAL semantics (valid non-empty string serials, no batch fields, no duplicates)', () => {
+      const validSerial = {
+        ...validBase,
+        trackingMode: 'SERIAL' as const,
+        quantityOnHand: 2,
+        quantityReserved: 0,
+        serialNumbers: ['SN-AAA-01', 'SN-AAA-02']
+      };
+      assert.strictEqual(validateInventoryRecord(validSerial).isValid, true);
+
+      // Rejects batch fields
+      assert.strictEqual(validateInventoryRecord({ ...validSerial, batchNumber: 'B1' }).isValid, false);
+      assert.strictEqual(validateInventoryRecord({ ...validSerial, expiryDate: '2026-10-15T00:00:00.000Z' }).isValid, false);
+
+      // Rejects non-string serials (e.g. numbers)
+      const numberSerial = { ...validSerial, serialNumbers: [123 as unknown as string] };
+      assert.strictEqual(validateInventoryRecord(numberSerial).isValid, false);
+
+      // Rejects null in serials
+      const nullSerial = { ...validSerial, serialNumbers: [null as unknown as string] };
+      assert.strictEqual(validateInventoryRecord(nullSerial).isValid, false);
+
+      // Rejects empty or whitespace serials
+      const emptySerial = { ...validSerial, serialNumbers: ['', 'ABC'] };
+      assert.strictEqual(validateInventoryRecord(emptySerial).isValid, false);
+
+      // Rejects duplicate serials
+      const dupSerial = { ...validSerial, serialNumbers: ['SN-01', 'sn-01'] };
+      const resDup = validateInventoryRecord(dupSerial);
+      assert.strictEqual(resDup.isValid, false);
+      assert.ok(resDup.errors.some(e => e.code === 'INVARIANT_VIOLATION' && e.message.includes('Duplicate serial')));
+    });
+
+    it('enforces trackingMode === BATCH semantics (valid non-empty batchNumber, valid ISO expiry, no serialNumbers)', () => {
+      const validBatch = {
+        ...validBase,
+        trackingMode: 'BATCH' as const,
+        batchNumber: 'LOT-2026-09X',
+        expiryDate: '2026-11-20T00:00:00.000Z'
+      };
+      assert.strictEqual(validateInventoryRecord(validBatch).isValid, true);
+
+      // Rejects serialNumbers
+      assert.strictEqual(validateInventoryRecord({ ...validBatch, serialNumbers: ['SN-1'] }).isValid, false);
+
+      // Rejects empty batchNumber
+      assert.strictEqual(validateInventoryRecord({ ...validBatch, batchNumber: '' }).isValid, false);
+      assert.strictEqual(validateInventoryRecord({ ...validBatch, batchNumber: '   ' }).isValid, false);
+
+      // Rejects malformed expiryDate
+      assert.strictEqual(validateInventoryRecord({ ...validBatch, expiryDate: 'not-a-date' }).isValid, false);
+      assert.strictEqual(validateInventoryRecord({ ...validBatch, expiryDate: '2025-99-99' }).isValid, false);
+    });
   });
 
   // ==========================================================================
@@ -266,6 +393,42 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
         quantityReserved: 10
       });
       assert.strictEqual(calculateAvailableQuantity(record), 0);
+    });
+
+    it('Invariant 4 strictness: calculateAvailableQuantity strictly rejects non-finite, negative, and reserved > onHand', () => {
+      // 1. Valid finite values
+      assert.strictEqual(calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: 3 }), 7);
+      assert.strictEqual(calculateAvailableQuantity({ quantityOnHand: 0, quantityReserved: 0 }), 0);
+
+      // 2. Rejects NaN
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: NaN, quantityReserved: 0 }), /quantityOnHand must be a finite number/);
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: NaN }), /quantityReserved must be a finite number/);
+
+      // 3. Rejects Infinity
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: Infinity, quantityReserved: 0 }), /quantityOnHand must be a finite number/);
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: Infinity }), /quantityReserved must be a finite number/);
+
+      // 4. Rejects negative quantities
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: -5, quantityReserved: 0 }), /quantityOnHand cannot be negative/);
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: -2 }), /quantityReserved cannot be negative/);
+
+      // 5. Rejects reserved > onHand without silently returning zero
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 5, quantityReserved: 8 }), /quantityReserved \(8\) cannot exceed quantityOnHand \(5\)/);
+    });
+
+    it('Logical Identity: getInventoryRecordKey establishes SKU + locationId boundary', () => {
+      const key1 = getInventoryRecordKey({ sku: 'tshirt-blk-m', locationId: 'LOC-WAREHOUSE-A' });
+      const key2 = getInventoryRecordKey({ sku: 'TSHIRT-BLK-M', locationId: 'loc-warehouse-a' });
+      const keyDiffLoc = getInventoryRecordKey({ sku: 'TSHIRT-BLK-M', locationId: 'loc-store-front' });
+      const keyDiffSku = getInventoryRecordKey({ sku: 'TSHIRT-RED-M', locationId: 'loc-warehouse-a' });
+
+      // Deterministic case-insensitive normalization
+      assert.strictEqual(key1, 'TSHIRT-BLK-M::loc-warehouse-a');
+      assert.strictEqual(key1, key2);
+
+      // Distinguishes location and SKU boundaries
+      assert.notStrictEqual(key1, keyDiffLoc);
+      assert.notStrictEqual(key1, keyDiffSku);
     });
 
     it('Invariant 5: Inventory belongs to an authoritative SKU', () => {
@@ -589,6 +752,154 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       // totalAvailable = 80 - 15 = 65
       assert.strictEqual(agg.totalAvailable, 65);
       assert.strictEqual(agg.isAnyInStock, true);
+    });
+
+    it('legacy migration policy: missing stock defaults to 0, invalid stock throws explicit error', () => {
+      // 1. parseLegacyStock missing values
+      assert.strictEqual(parseLegacyStock(undefined, 'test.missing'), 0);
+      assert.strictEqual(parseLegacyStock(null, 'test.null'), 0);
+      assert.strictEqual(parseLegacyStock(15, 'test.valid'), 15);
+
+      // 2. parseLegacyStock invalid values throw InventoryDomainError
+      assert.throws(() => parseLegacyStock(NaN, 'test.nan'), /stock must be a finite number or omitted, received NaN/);
+      assert.throws(() => parseLegacyStock(Infinity, 'test.inf'), /stock must be a finite number or omitted, received Infinity/);
+      assert.throws(() => parseLegacyStock(-Infinity, 'test.-inf'), /stock must be a finite number or omitted, received -Infinity/);
+      assert.throws(() => parseLegacyStock(-10, 'test.neg'), /stock cannot be negative, received -10/);
+      assert.throws(() => parseLegacyStock('invalid-str', 'test.str'), /stock must be a finite number or omitted, received invalid-str/);
+
+      // 3. createInventoryRecordsFromLegacyProduct with missing stock succeeds with 0
+      const missingStockProd = {
+        id: 'prod-no-stock',
+        name: 'Product with Missing Stock',
+        sku: 'SKU-NO-STOCK',
+        price: 10,
+        cost: 5,
+        category: 'General',
+        location: 'A1',
+        reorderPoint: 2,
+        barcode: '12345',
+        qrCode: 'qr-12345',
+        variants: [],
+        salesCount: 0
+      } as unknown as Product;
+      const records = createInventoryRecordsFromLegacyProduct(missingStockProd);
+      assert.strictEqual(records.length, 1);
+      assert.strictEqual(records[0].quantityOnHand, 0);
+
+      // 4. createInventoryRecordsFromLegacyProduct with NaN stock throws explicit error
+      const nanStockProd = {
+        ...missingStockProd,
+        stock: NaN
+      } as unknown as Product;
+      assert.throws(() => createInventoryRecordsFromLegacyProduct(nanStockProd), /stock must be a finite number or omitted, received NaN/);
+
+      // 5. createInventoryRecordsFromLegacyProduct with negative variant stock throws explicit error
+      const negativeVariantProd = {
+        ...missingStockProd,
+        variants: [{ sku: 'VAR-1', stock: -5 }]
+      } as unknown as Product;
+      assert.throws(() => createInventoryRecordsFromLegacyProduct(negativeVariantProd), /stock cannot be negative, received -5/);
+    });
+
+    it('legacy migration policy: trackingMode NONE forces quantityOnHand to 0', () => {
+      const nonStockedService = {
+        id: 'prod-service-1',
+        name: 'Installation Service',
+        sku: 'SVC-INSTALL',
+        price: 75.00,
+        cost: 0,
+        category: 'Services',
+        location: 'N/A',
+        reorderPoint: 0,
+        barcode: 'SVC-1',
+        qrCode: 'qr-svc-1',
+        inventoryTracking: 'NONE' as const,
+        stock: 50, // Historical legacy field had dummy stock
+        variants: [],
+        salesCount: 0
+      } as unknown as Product;
+
+      const records = createInventoryRecordsFromLegacyProduct(nonStockedService);
+      assert.strictEqual(records.length, 1);
+      assert.strictEqual(records[0].trackingMode, 'NONE');
+      assert.strictEqual(records[0].quantityOnHand, 0);
+      assert.strictEqual(records[0].quantityReserved, 0);
+    });
+
+    it('Variant Identity: does NOT use SKU as variantId in legacy adapter; preserves genuine IDs in canonical adapter', () => {
+      // 1. Legacy ProductVariant has only SKU (no primary id)
+      const legacyWithVariants = {
+        id: 'prod-shirt-legacy',
+        name: 'Classic Tee',
+        sku: 'TEE-BASE',
+        price: 20,
+        cost: 8,
+        category: 'Apparel',
+        location: 'Shelf 1',
+        reorderPoint: 5,
+        barcode: 'TEE-BAR',
+        qrCode: 'qr-tee',
+        variants: [
+          { sku: 'TEE-S', stock: 10 },
+          { sku: 'TEE-M', stock: 20 }
+        ],
+        salesCount: 0
+      } as unknown as Product;
+
+      const legacyRecords = createInventoryRecordsFromLegacyProduct(legacyWithVariants);
+      assert.strictEqual(legacyRecords.length, 2);
+      // Crucial verification: variantId must NOT equal variant.sku!
+      assert.strictEqual(legacyRecords[0].variantId, undefined, 'variantId must not be set to variant.sku');
+      assert.strictEqual(legacyRecords[0].sku, 'TEE-S');
+      assert.strictEqual(legacyRecords[1].variantId, undefined, 'variantId must not be set to variant.sku');
+      assert.strictEqual(legacyRecords[1].sku, 'TEE-M');
+
+      // 2. Legacy variant with genuine id property preserves it
+      const legacyWithGenuineId = {
+        id: 'prod-jacket-legacy',
+        name: 'Winter Jacket',
+        sku: 'JKT-BASE',
+        price: 150,
+        cost: 70,
+        category: 'Outerwear',
+        location: 'Shelf 2',
+        reorderPoint: 3,
+        barcode: 'JKT-BAR',
+        qrCode: 'qr-jkt',
+        variants: [
+          { sku: 'JKT-BLK-L', stock: 5, id: 'var-genuine-jkt-01' }
+        ],
+        salesCount: 0
+      } as unknown as Product;
+      const genuineRecords = createInventoryRecordsFromLegacyProduct(legacyWithGenuineId);
+      assert.strictEqual(genuineRecords[0].variantId, 'var-genuine-jkt-01');
+      assert.strictEqual(genuineRecords[0].sku, 'JKT-BLK-L');
+      assert.notStrictEqual(genuineRecords[0].variantId, genuineRecords[0].sku);
+
+      // 3. CanonicalProduct hierarchy: Product ID -> Variant ID -> SKU -> Inventory Record
+      const canonical = normalizeProduct({
+        id: 'prod-canon-100',
+        name: 'Canonical Sneaker',
+        sku: 'SNK-BASE',
+        price: 90,
+        category: 'Footwear',
+        variants: [
+          { sku: 'SNK-42', retailPrice: 90 },
+          { sku: 'SNK-43', retailPrice: 90 }
+        ]
+      });
+
+      const canonicalRecords = createInventoryRecordsFromCanonicalProduct(canonical, 'loc-main', 15);
+      assert.strictEqual(canonicalRecords.length, 2);
+
+      // Verify complete hierarchy mapping
+      const rec42 = canonicalRecords[0];
+      const variant42 = canonical.variants[0];
+      assert.strictEqual(rec42.productId, canonical.id);
+      assert.strictEqual(rec42.variantId, variant42.id); // CanonicalVariant.id
+      assert.strictEqual(rec42.sku, variant42.sku);       // CanonicalVariant.sku
+      assert.notStrictEqual(rec42.variantId, rec42.sku);  // Proof that variantId !== sku
+      assert.strictEqual(rec42.quantityOnHand, 15);
     });
   });
 });
