@@ -223,6 +223,23 @@ export function isValidAuditLog(data: any): boolean {
   );
 }
 
+export function isValidInventoryRecord(data: any): boolean {
+  if (!data || typeof data !== 'object') return false;
+  return (
+    typeof data.id === 'string' && data.id.length > 0 && data.id.length <= 128 &&
+    typeof data.sku === 'string' && data.sku.length > 0 && data.sku.length <= 100 &&
+    typeof data.productId === 'string' && data.productId.length > 0 && data.productId.length <= 128 &&
+    typeof data.locationId === 'string' && data.locationId.length > 0 && data.locationId.length <= 100 &&
+    typeof data.quantityOnHand === 'number' && data.quantityOnHand >= 0 &&
+    typeof data.quantityReserved === 'number' && data.quantityReserved >= 0 &&
+    data.quantityReserved <= data.quantityOnHand &&
+    typeof data.trackingMode === 'string' && ['QUANTITY', 'SERIAL', 'BATCH', 'NONE'].includes(data.trackingMode) &&
+    typeof data.status === 'string' && ['ACTIVE', 'INACTIVE'].includes(data.status) &&
+    (!('reorderPoint' in data) || (typeof data.reorderPoint === 'number' && data.reorderPoint >= 0)) &&
+    (!('reorderQuantity' in data) || (typeof data.reorderQuantity === 'number' && data.reorderQuantity >= 0))
+  );
+}
+
 export function isValidSettings(data: any): boolean {
   if (!data) return false;
   return (
@@ -525,6 +542,99 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
       test('Store Manager can delete products', () => {
         const canDelete = isManagerOrAdmin(storeManagerUser);
         assert.strictEqual(canDelete, true);
+      });
+    });
+
+    // Inventory Collection (Authoritative Stock State - INV-001)
+    describe('Inventory Collection (/inventory)', () => {
+      test('Public unauthenticated visitor CANNOT read inventory collection', () => {
+        const canRead = isStaff(publicVisitor);
+        assert.strictEqual(canRead, false);
+      });
+
+      test('Public unauthenticated visitor CANNOT create, update or delete inventory records', () => {
+        const canCreate = isValidId('inv-1') && isInventoryStaff(publicVisitor);
+        const canDelete = isValidId('inv-1') && isManagerOrAdmin(publicVisitor);
+        assert.strictEqual(canCreate, false);
+        assert.strictEqual(canDelete, false);
+      });
+
+      test('Customer CANNOT read or write inventory records', () => {
+        const canRead = isStaff(customerUser);
+        const canCreate = isInventoryStaff(customerUser);
+        assert.strictEqual(canRead, false);
+        assert.strictEqual(canCreate, false);
+      });
+
+      test('Cashier (sales staff) CAN read inventory records for stock checks', () => {
+        const canRead = isStaff(cashierUser);
+        assert.strictEqual(canRead, true);
+      });
+
+      test('Cashier CANNOT create, update, or delete inventory records', () => {
+        const canCreate = isInventoryStaff(cashierUser);
+        const canDelete = isManagerOrAdmin(cashierUser);
+        assert.strictEqual(canCreate, false);
+        assert.strictEqual(canDelete, false);
+      });
+
+      test('Inventory Manager can create and update inventory records with valid schema', () => {
+        const validRecord = {
+          id: 'inv-sku-1-loc-main',
+          sku: 'SKU-COFFEE-01',
+          productId: 'prod-coffee-1',
+          locationId: 'loc-main-store',
+          quantityOnHand: 50,
+          quantityReserved: 5,
+          reorderPoint: 10,
+          reorderQuantity: 50,
+          trackingMode: 'QUANTITY',
+          status: 'ACTIVE'
+        };
+        const canCreate = isInventoryStaff(inventoryUser) && isValidId(validRecord.id) && isValidInventoryRecord(validRecord);
+        assert.strictEqual(canCreate, true);
+      });
+
+      test('Inventory Manager CANNOT delete inventory records (requires Manager or Admin)', () => {
+        const canDelete = isManagerOrAdmin(inventoryUser);
+        assert.strictEqual(canDelete, false);
+      });
+
+      test('Store Manager can delete inventory records', () => {
+        const canDelete = isManagerOrAdmin(storeManagerUser);
+        assert.strictEqual(canDelete, true);
+      });
+
+      test('Security rule rejects invalid inventory records (negative quantity, reserved > onHand, bad trackingMode)', () => {
+        const base = {
+          id: 'inv-1',
+          sku: 'SKU-1',
+          productId: 'prod-1',
+          locationId: 'loc-1',
+          quantityOnHand: 10,
+          quantityReserved: 2,
+          trackingMode: 'QUANTITY',
+          status: 'ACTIVE'
+        };
+
+        // Negative quantityOnHand
+        assert.strictEqual(isValidInventoryRecord({ ...base, quantityOnHand: -1 }), false);
+        // Negative quantityReserved
+        assert.strictEqual(isValidInventoryRecord({ ...base, quantityReserved: -1 }), false);
+        // quantityReserved > quantityOnHand
+        assert.strictEqual(isValidInventoryRecord({ ...base, quantityOnHand: 5, quantityReserved: 10 }), false);
+        // Empty SKU
+        assert.strictEqual(isValidInventoryRecord({ ...base, sku: '' }), false);
+        // Empty productId
+        assert.strictEqual(isValidInventoryRecord({ ...base, productId: '' }), false);
+        // Empty locationId
+        assert.strictEqual(isValidInventoryRecord({ ...base, locationId: '' }), false);
+        // Invalid trackingMode
+        assert.strictEqual(isValidInventoryRecord({ ...base, trackingMode: 'UNTRACKED' }), false);
+        // Invalid status
+        assert.strictEqual(isValidInventoryRecord({ ...base, status: 'ARCHIVED' }), false);
+        // Valid
+        assert.strictEqual(isValidInventoryRecord(base), true);
       });
     });
 

@@ -154,6 +154,20 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         shiftStartTime: '2026-09-03T08:00:00Z',
         totalSales: 1250.00
       });
+
+      // Seed authoritative inventory record (INV-001)
+      await setDoc(doc(adminDb, 'inventory', 'inv-scan-100'), {
+        id: 'inv-scan-100',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-main-store',
+        quantityOnHand: 50,
+        quantityReserved: 5,
+        reorderPoint: 10,
+        reorderQuantity: 25,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      });
     });
   });
 
@@ -164,6 +178,26 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
     it('CANNOT read internal products collection (blocks cost & supplier exposure)', async () => {
       const unauth = testEnv.unauthenticatedContext().firestore();
       await assertFails(getDoc(doc(unauth, 'products', 'prod-100')));
+    });
+
+    it('CANNOT read internal inventory collection (INV-001)', async () => {
+      const unauth = testEnv.unauthenticatedContext().firestore();
+      await assertFails(getDoc(doc(unauth, 'inventory', 'inv-scan-100')));
+      await assertFails(getDocs(collection(unauth, 'inventory')));
+    });
+
+    it('CANNOT write to internal inventory collection (INV-001)', async () => {
+      const unauth = testEnv.unauthenticatedContext().firestore();
+      await assertFails(setDoc(doc(unauth, 'inventory', 'inv-unauth'), {
+        id: 'inv-unauth',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-1',
+        quantityOnHand: 10,
+        quantityReserved: 0,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      }));
     });
 
     it('CAN read public products projection collection (storefront safe catalog)', async () => {
@@ -407,6 +441,21 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       await assertFails(getDocs(collection(customer, 'audit_logs')));
       await assertFails(deleteDoc(doc(customer, 'audit_logs', 'log-100')));
     });
+
+    it('CANNOT read or write inventory records (INV-001)', async () => {
+      const customer = testEnv.authenticatedContext('cust-100', { email: 'alice@example.com' }).firestore();
+      await assertFails(getDoc(doc(customer, 'inventory', 'inv-scan-100')));
+      await assertFails(setDoc(doc(customer, 'inventory', 'inv-cust'), {
+        id: 'inv-cust',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-1',
+        quantityOnHand: 999,
+        quantityReserved: 0,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      }));
+    });
   });
 
   // ==========================================
@@ -494,6 +543,22 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       const cashier = testEnv.authenticatedContext('staff-cashier-1', { role: 'Cashier', isStaff: true }).firestore();
       await assertFails(deleteDoc(doc(cashier, 'shift_reports', 'shift-100')));
     });
+
+    it('CAN read inventory records for stock checks but CANNOT create or delete (INV-001)', async () => {
+      const cashier = testEnv.authenticatedContext('staff-cashier-1', { role: 'Cashier', isStaff: true }).firestore();
+      await assertSucceeds(getDoc(doc(cashier, 'inventory', 'inv-scan-100')));
+      await assertFails(setDoc(doc(cashier, 'inventory', 'inv-by-cashier'), {
+        id: 'inv-by-cashier',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-1',
+        quantityOnHand: 10,
+        quantityReserved: 0,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      }));
+      await assertFails(deleteDoc(doc(cashier, 'inventory', 'inv-scan-100')));
+    });
   });
 
   // ==========================================
@@ -531,16 +596,63 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       await assertFails(updateDoc(doc(invMgr, 'settings', 'general'), { taxRate: 0 }));
       await assertFails(deleteDoc(doc(invMgr, 'orders', 'ord-cust-100')));
     });
+
+    it('CAN create and update valid inventory records (INV-001)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+      await assertSucceeds(setDoc(doc(invMgr, 'inventory', 'inv-new-200'), {
+        id: 'inv-new-200',
+        sku: 'PRINT-200',
+        productId: 'prod-200',
+        locationId: 'loc-main-store',
+        quantityOnHand: 25,
+        quantityReserved: 2,
+        reorderPoint: 5,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      }));
+    });
+
+    it('CANNOT create invalid inventory records (negative quantity or reserved > onHand) (INV-001)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+      // Negative onHand
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-neg'), {
+        id: 'inv-neg',
+        sku: 'PRINT-200',
+        productId: 'prod-200',
+        locationId: 'loc-main-store',
+        quantityOnHand: -5,
+        quantityReserved: 0,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      }));
+      // Reserved > onHand
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-over-res'), {
+        id: 'inv-over-res',
+        sku: 'PRINT-200',
+        productId: 'prod-200',
+        locationId: 'loc-main-store',
+        quantityOnHand: 5,
+        quantityReserved: 10,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      }));
+    });
+
+    it('CANNOT delete inventory records (requires Store Manager or Admin) (INV-001)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+      await assertFails(deleteDoc(doc(invMgr, 'inventory', 'inv-scan-100')));
+    });
   });
 
   // ==========================================
   // Suite 5: Store Manager Role Boundaries
   // ==========================================
   describe('5. Store Manager Role Boundaries', () => {
-    it('CAN read audit logs and delete products', async () => {
+    it('CAN read audit logs, delete products, and delete inventory records', async () => {
       const storeMgr = testEnv.authenticatedContext('staff-mgr-1', { role: 'Store Manager', isStaff: true }).firestore();
       await assertSucceeds(getDocs(collection(storeMgr, 'audit_logs')));
       await assertSucceeds(deleteDoc(doc(storeMgr, 'products', 'prod-100')));
+      await assertSucceeds(deleteDoc(doc(storeMgr, 'inventory', 'inv-scan-100')));
     });
 
     it('CAN modify store settings with valid schema', async () => {

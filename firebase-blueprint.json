@@ -153,9 +153,31 @@
         "notes": { "type": "string" }
       },
       "required": ["reportId", "terminalId", "staffName", "shiftStartTime", "totalSales"]
+    },
+    "inventoryRecord": {
+      "title": "InventoryRecord",
+      "description": "Authoritative operational inventory state for an SKU at a location (INV-001)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sku": { "type": "string" },
+        "productId": { "type": "string" },
+        "locationId": { "type": "string" },
+        "quantityOnHand": { "type": "number" },
+        "quantityReserved": { "type": "number" },
+        "trackingMode": { "type": "string" },
+        "status": { "type": "string" },
+        "reorderPoint": { "type": "number" },
+        "reorderQuantity": { "type": "number" }
+      },
+      "required": ["id", "sku", "productId", "locationId", "quantityOnHand", "quantityReserved", "trackingMode", "status"]
     }
   },
   "firestore": {
+    "/inventory/{inventoryId}": {
+      "schema": "inventoryRecord",
+      "description": "Authoritative inventory state records for SKUs across locations (staff only - INV-001)"
+    },
     "/products/{productId}": {
       "schema": "product",
       "description": "Internal inventory catalog with wholesale costs, reorder levels, and tracking rules (staff only)"

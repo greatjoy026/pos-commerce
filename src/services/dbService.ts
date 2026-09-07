@@ -15,6 +15,7 @@ import {
 import { db, auth } from '../lib/firebase';
 import { Product, PublicProductProjection, Customer, StaffMember, Order, AuditLog, SystemSettings, PublicSettingsProjection, ShiftReportData } from '../types';
 import { normalizeToLegacyProduct, toPublicCatalogProjection } from '../domain/product';
+import { InventoryRecord, validateInventoryRecord } from '../domain/inventory';
 import { 
   INITIAL_PRODUCTS, 
   INITIAL_CUSTOMERS, 
@@ -27,6 +28,7 @@ import {
 export const COLLECTIONS = {
   PRODUCTS: 'products',
   PUBLIC_PRODUCTS: 'public_products',
+  INVENTORY: 'inventory',
   CUSTOMERS: 'customers',
   STAFF: 'staff',
   STAFF_CREDENTIALS: 'staff_credentials',
@@ -735,3 +737,81 @@ export async function saveShiftReportToDB(report: ShiftReportData): Promise<void
     handleFirestoreError(error, OperationType.WRITE, `${COLLECTIONS.SHIFT_REPORTS}/${report.reportId}`);
   }
 }
+
+/**
+ * ============================================================================
+ * Inventory Operations (Authoritative Stock State - INV-001)
+ * ============================================================================
+ */
+
+/**
+ * Subscribes to the authoritative internal inventory collection.
+ * Staff-only access (guaranteed by security rules).
+ */
+export function subscribeInventory(
+  onUpdate: (records: InventoryRecord[]) => void,
+  onError?: (err: any) => void
+) {
+  const colRef = collection(db, COLLECTIONS.INVENTORY);
+  return onSnapshot(colRef, (snapshot) => {
+    if (!snapshot.empty) {
+      const records: InventoryRecord[] = [];
+      snapshot.forEach(docSnap => {
+        const val = validateInventoryRecord(docSnap.data());
+        if (val.isValid && val.record) {
+          records.push(val.record);
+        }
+      });
+      onUpdate(records);
+    } else {
+      onUpdate([]);
+    }
+  }, (err) => {
+    handleFirestoreError(err, OperationType.LIST, COLLECTIONS.INVENTORY);
+    if (onError) onError(err);
+  });
+}
+
+/**
+ * Saves or updates an authoritative InventoryRecord in Firestore.
+ * Requires Inventory Staff role and valid schema.
+ */
+export async function saveInventoryRecordToDB(record: InventoryRecord): Promise<void> {
+  const validation = validateInventoryRecord(record);
+  if (!validation.isValid) {
+    throw new Error(`Cannot save invalid inventory record: ${validation.errors.map(e => e.message).join(', ')}`);
+  }
+
+  try {
+    const docRef = doc(db, COLLECTIONS.INVENTORY, record.id);
+    await setDoc(docRef, record);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${COLLECTIONS.INVENTORY}/${record.id}`);
+    throw error;
+  }
+}
+
+/**
+ * Queries inventory records for a specific sellable SKU.
+ */
+export async function getInventoryBySku(sku: string): Promise<InventoryRecord[]> {
+  try {
+    const colRef = collection(db, COLLECTIONS.INVENTORY);
+    const snap = await getDocs(colRef);
+    const records: InventoryRecord[] = [];
+    snap.forEach(docSnap => {
+      const data = docSnap.data();
+      if (typeof data.sku === 'string' && data.sku.toUpperCase() === sku.toUpperCase()) {
+        const val = validateInventoryRecord(data);
+        if (val.isValid && val.record) {
+          records.push(val.record);
+        }
+      }
+    });
+    return records;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.INVENTORY}?sku=${sku}`);
+    return [];
+  }
+}
+

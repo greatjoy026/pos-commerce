@@ -251,6 +251,23 @@ service cloud.firestore {
     }
 
     // ==========================================
+    // Internal Inventory Record Schema (INV-001)
+    // ==========================================
+    function isValidInventoryRecord(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+             data.productId is string && data.productId.size() > 0 && data.productId.size() <= 128 &&
+             data.locationId is string && data.locationId.size() > 0 && data.locationId.size() <= 100 &&
+             data.quantityOnHand is number && data.quantityOnHand >= 0 &&
+             data.quantityReserved is number && data.quantityReserved >= 0 &&
+             data.quantityReserved <= data.quantityOnHand &&
+             data.trackingMode is string && data.trackingMode in ['QUANTITY', 'SERIAL', 'BATCH', 'NONE'] &&
+             data.status is string && data.status in ['ACTIVE', 'INACTIVE'] &&
+             (!('reorderPoint' in data) || (data.reorderPoint is number && data.reorderPoint >= 0)) &&
+             (!('reorderQuantity' in data) || (data.reorderQuantity is number && data.reorderQuantity >= 0));
+    }
+
+    // ==========================================
     // 1. Default Deny Global Boundary
     // ==========================================
     match /{document=**} {
@@ -267,6 +284,18 @@ service cloud.firestore {
       allow create: if isValidId(productId) && isInventoryStaff() && isValidProduct(incoming());
       allow update: if isValidId(productId) && isInventoryStaff() && isValidProduct(incoming());
       allow delete: if isValidId(productId) && isManagerOrAdmin();
+    }
+
+    // ==========================================
+    // 2.1. Inventory Collection (Authoritative Stock State - INV-001)
+    // ==========================================
+    // Internal operational inventory: strictly staff-only.
+    // Public unauthenticated visitors have NO read, NO create, NO update, NO delete.
+    match /inventory/{inventoryId} {
+      allow read: if isStaff();
+      allow create: if isValidId(inventoryId) && isInventoryStaff() && isValidInventoryRecord(incoming());
+      allow update: if isValidId(inventoryId) && isInventoryStaff() && isValidInventoryRecord(incoming());
+      allow delete: if isValidId(inventoryId) && isManagerOrAdmin();
     }
 
     // ==========================================
