@@ -352,3 +352,21 @@ To maintain clean separation between product types and inventory behavior, capab
   * **Batch-Tracked Items**: `SKU::LOCATION::BATCH` (e.g., `SKU-100::loc-warehouse::LOT-2026-A`).
 * Distinct locations for the same SKU (`SKU-A::LOC-1` vs `SKU-A::LOC-2`) and distinct batches for the same SKU at the same location (`SKU-A::LOC-1::BATCH-1` vs `SKU-A::LOC-1::BATCH-2`) generate non-colliding keys and independent Firestore records.
 
+### 10.4 Enforcement Boundaries and Firestore Security Rules Capabilities & Limitations
+
+The inventory architecture implements defense-in-depth across the TypeScript domain validation layer and Firestore Security Rules. However, due to the execution semantics of Firestore CEL (Common Expression Language), certain validations are partitioned:
+
+#### 10.4.1 Enforced at the Firestore Security Rules Boundary
+1. **Quantity Types & Invariants**: Enforces strict integer types (`int`), non-negativity (`>= 0`), and reservation ceiling (`quantityReserved <= quantityOnHand`).
+2. **SERIAL Cardinality**: Enforces exact match between array size and on-hand stock (`serialNumbers.size() == quantityOnHand`).
+3. **SERIAL Array-Wide Uniqueness**: Leverages `serialNumbers.toSet().size() == serialNumbers.size()` to reject duplicate serials across the entire array at the database engine level.
+4. **SERIAL Array-Wide Non-Empty String Check**: Leverages `!serialNumbers.hasAny([''])` to reject empty string serials anywhere in the array.
+5. **SERIAL Boundary Sizing**: Validates string type and size bounds on head and tail array elements (`[0]` and `[size() - 1]`).
+6. **BATCH Structural Integrity**: Enforces mandatory non-empty `batchNumber` (`1 <= size <= 100`) and structural length bounds on `expiryDate` (`10 <= size <= 40`).
+7. **Tracking Mode Isolation**: Forbids batch fields on serial records and forbids serial arrays on batch records.
+
+#### 10.4.2 Firestore CEL Limitations (Authoritatively Enforced in TypeScript Domain)
+1. **CEL Unbounded Loop Limitation**: Firestore Security Rules CEL does not possess unbounded loops (`for`, `while`) or list comprehension iteration macros over arbitrary collections. While array-wide uniqueness and non-empty checks are enforced in rules via `toSet()` and `hasAny()`, exhaustive per-element string sanitization and custom regex formatting on every individual serial are enforced authoritatively by `src/domain/inventory/validation.ts`.
+2. **ISO 8601 Date Semantic Limitation**: Firestore Rules CEL lacks built-in regex pattern matching and string-to-timestamp parsing functions for arbitrary ISO strings. Rules enforces structural string bounds (`10 <= size <= 40`), while full calendar semantic validation (leap years, month/day boundaries, ISO 8601 formatting) is authoritatively enforced by `src/domain/inventory/validation.ts`.
+3. **Public Product Availability**: In alignment with `PROD-001-F2.1` and `firebase-blueprint.json`, raw numeric stock is strictly prohibited from the public storefront projection (`/public_products`), requiring categorical availability (`availability.status`).
+

@@ -22,22 +22,31 @@
     },
     "publicProduct": {
       "title": "PublicProductProjection",
-      "description": "Public-safe storefront product projection omitting confidential supplier and cost data",
+      "description": "Public-safe storefront product projection omitting confidential supplier, cost, and exact stock data, providing categorical availability status",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "name": { "type": "string" },
         "sku": { "type": "string" },
         "price": { "type": "number" },
-        "stock": { "type": "number" },
         "category": { "type": "string" },
+        "availability": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK"]
+            }
+          },
+          "required": ["status"]
+        },
         "imageUrl": { "type": "string" },
         "description": { "type": "string" },
         "rating": { "type": "number" },
         "reviewCount": { "type": "number" },
         "publishOnline": { "type": "boolean" }
       },
-      "required": ["id", "name", "sku", "price", "stock", "category"]
+      "required": ["id", "name", "sku", "price", "category", "availability"]
     },
     "customer": {
       "title": "Customer",

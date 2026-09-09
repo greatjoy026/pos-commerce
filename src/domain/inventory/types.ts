@@ -1,5 +1,5 @@
 /**
- * Authoritative Inventory Domain Types (INV-001)
+ * Authoritative Inventory Domain Types (INV-001 / INV-001-F1.1)
  *
  * Architectural Boundary:
  * Product -> Variant -> SKU -> Inventory
@@ -14,6 +14,13 @@
  * Inventory quantity has EXACTLY ONE authoritative owner: InventoryRecord.
  * CanonicalProduct and CanonicalVariant do NOT own stock state.
  * Legacy Product.stock is strictly a read-only compatibility projection.
+ *
+ * AUTHORITATIVE QUANTITY CONTRACT (Option A - Discrete Integer Inventory):
+ * - All physical on-hand, reserved, and reorder quantities are strictly non-negative discrete integers:
+ *   `Number.isInteger(qty) && qty >= 0`.
+ * - Fractional quantities (e.g. 1.5), NaN, and Infinity are strictly rejected at all system boundaries.
+ * - UOM conversions (e.g. wholesale carton of 24 pieces) are expressed via base unit multipliers,
+ *   preserving discrete integer counts at the inventory layer.
  */
 
 import { PublicAvailabilityInfo, PublicAvailabilityStatus } from '../product/types';
@@ -63,16 +70,16 @@ export interface InventoryRecord {
   /** Standardized location identifier (e.g. "loc-main-store", "loc-warehouse-a") */
   locationId: string;
 
-  /** Total physical quantity on-hand at this location (>= 0, finite) */
+  /** Total physical quantity on-hand at this location (strictly non-negative integer: >= 0, integer) */
   quantityOnHand: number;
 
-  /** Quantity allocated to active reservations/pending orders (>= 0, <= quantityOnHand, finite) */
+  /** Quantity allocated to active reservations/pending orders (strictly non-negative integer: >= 0, <= quantityOnHand, integer) */
   quantityReserved: number;
 
-  /** Minimum threshold triggering reorder advisories (>= 0, finite) */
+  /** Minimum threshold triggering reorder advisories (when set, strictly non-negative integer: >= 0, integer) */
   reorderPoint?: number;
 
-  /** Suggested replenishment order batch quantity (>= 0, finite) */
+  /** Suggested replenishment order batch quantity (when set, strictly non-negative integer: >= 0, integer) */
   reorderQuantity?: number;
 
   /** Stock tracking methodology */
@@ -81,13 +88,24 @@ export interface InventoryRecord {
   /** Inventory record status */
   status: InventoryStatus;
 
-  /** Serial identifiers registered to this SKU/location (when trackingMode === 'SERIAL') */
+  /**
+   * Serial identifiers registered to this SKU/location (when trackingMode === 'SERIAL').
+   * Cardinality invariant: serialNumbers.length === quantityOnHand.
+   * Every serial number must be a non-empty string. Duplicates are strictly rejected.
+   */
   serialNumbers?: string[];
 
-  /** Batch/lot identifier (when trackingMode === 'BATCH') */
+  /**
+   * Batch/lot identifier (when trackingMode === 'BATCH').
+   * Mandatory non-empty string.
+   */
   batchNumber?: string;
 
-  /** Expiration date in ISO format (when trackingMode === 'BATCH') */
+  /**
+   * Expiration date in ISO 8601 format (when trackingMode === 'BATCH').
+   * Note: Enforced with semantic ISO validation in TypeScript domain;
+   * enforced structurally as bounded string in Firestore security rules.
+   */
   expiryDate?: string;
 
   /** ISO timestamp when record was created */
@@ -176,10 +194,15 @@ export interface InventoryOperationalProjection {
   productId: string;
   variantId?: string;
   locationId: string;
+  /** Physical on-hand quantity (non-negative integer) */
   quantityOnHand: number;
+  /** Reserved quantity (non-negative integer) */
   quantityReserved: number;
+  /** Derived available quantity (non-negative integer: onHand - reserved) */
   availableQuantity: number;
+  /** Reorder point threshold (when set, non-negative integer) */
   reorderPoint?: number;
+  /** Reorder batch quantity (when set, non-negative integer) */
   reorderQuantity?: number;
   trackingMode: InventoryTrackingMode;
   status: InventoryStatus;

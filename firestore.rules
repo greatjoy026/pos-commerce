@@ -252,6 +252,21 @@ service cloud.firestore {
 
     // ==========================================
     // Internal Inventory Record Schema (INV-001 / INV-001-F1 / INV-001-F1.1)
+    //
+    // FIRESTORE RULES BOUNDARY & LIMITATIONS (INV-001-F1.1):
+    // 1. SERIAL Validation:
+    //    - Rules enforces cardinality equality (serialNumbers.size() == quantityOnHand).
+    //    - Rules enforces array-wide uniqueness (serialNumbers.toSet().size() == serialNumbers.size()).
+    //    - Rules enforces rejection of empty strings across the entire array (!serialNumbers.hasAny([''])).
+    //    - Rules enforces head and tail string size bounds.
+    //    - CEL LIMITATION: Firestore Rules lacks unbounded loops or element iteration macros. Full
+    //      per-element string sanitization and character formatting are enforced in the TypeScript
+    //      domain validator (src/domain/inventory/validation.ts).
+    // 2. BATCH Expiry Date Validation:
+    //    - Rules enforces string type and structural character length bounds (10 <= size <= 40).
+    //    - CEL LIMITATION: Firestore Rules does not possess regex pattern matching or arbitrary ISO 8601
+    //      date parsing. Semantic ISO 8601 validity is authoritatively enforced in the TypeScript domain
+    //      validator (src/domain/inventory/validation.ts).
     // ==========================================
     function isValidInventoryRecord(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
@@ -277,7 +292,11 @@ service cloud.firestore {
                (!('batchNumber' in data) && !('expiryDate' in data) &&
                 ('serialNumbers' in data) && data.serialNumbers is list &&
                 data.serialNumbers.size() == data.quantityOnHand &&
-                (data.serialNumbers.size() == 0 || (data.serialNumbers[0] is string && data.serialNumbers[0].size() > 0 && data.serialNumbers[0].size() <= 100))) :
+                data.serialNumbers.toSet().size() == data.serialNumbers.size() &&
+                !data.serialNumbers.hasAny(['']) &&
+                (data.serialNumbers.size() == 0 ||
+                 (data.serialNumbers[0] is string && data.serialNumbers[0].size() > 0 && data.serialNumbers[0].size() <= 100 &&
+                  data.serialNumbers[data.serialNumbers.size() - 1] is string && data.serialNumbers[data.serialNumbers.size() - 1].size() > 0 && data.serialNumbers[data.serialNumbers.size() - 1].size() <= 100))) :
               data.trackingMode == 'BATCH' ?
                (!('serialNumbers' in data) &&
                 ('batchNumber' in data) && data.batchNumber is string && data.batchNumber.size() > 0 && data.batchNumber.size() <= 100 &&

@@ -247,19 +247,26 @@ This register records foundational architectural decisions for `greatjoy026/pos-
        * No duplicate serial numbers in the array.
        * Zero inventory (`quantityOnHand == 0`) requires an empty array (`serialNumbers: []`).
        * Batch fields (`batchNumber`, `expiryDate`) are strictly forbidden.
+     - **Firestore Rules vs Domain Boundary**:
+       * Firestore Rules enforces cardinality equality (`serialNumbers.size() == quantityOnHand`), array-wide uniqueness (`serialNumbers.toSet().size() == serialNumbers.size()`), array-wide non-empty items (`!serialNumbers.hasAny([''])`), and head/tail string size bounds.
+       * Due to CEL lacking unbounded loops, deep per-element string sanitization and custom formatting are authoritatively enforced in `src/domain/inventory/validation.ts`.
   3. **Invariants Governing BATCH Inventory**:
      - `trackingMode === 'BATCH'` requires:
        * `batchNumber` is mandatory and must be a non-empty string.
        * `expiryDate` when provided must be a valid ISO 8601 string.
        * `serialNumbers` is strictly forbidden.
        * Multiple batches for the same SKU and location are first-class citizens and coexist concurrently.
-  4. **Logical Identity Rule for Inventory Records**:
+     - **Firestore Rules vs Domain Boundary**:
+       * Firestore Rules enforces structural length bounds (`10 <= size <= 40`) due to CEL lacking regex or arbitrary date parsing. Full semantic ISO 8601 validation is authoritatively enforced in `src/domain/inventory/validation.ts`.
+  4. **Schema Blueprint & Public Storefront Alignment**:
+     - `firebase-blueprint.json` `publicProduct` schema is updated to remove exact `stock` and mandate categorical `availability: { status }` in alignment with `PROD-001-F2.1` and `firestore.rules`.
+  5. **Logical Identity Rule for Inventory Records**:
      - Canonical key generation is formalized in `getInventoryRecordKey()`:
        * For `QUANTITY` and `NONE`: `SKU::LOCATION` (e.g., `SKU-100::loc-warehouse`).
        * For `BATCH`: `SKU::LOCATION::BATCH` (e.g., `SKU-100::loc-warehouse::LOT-2026-A`).
        * Distinct locations (e.g., `SKU-A::LOCATION-1` vs `SKU-A::LOCATION-2`) and distinct batches (e.g., `SKU-A::LOC-1::BATCH-1` vs `SKU-A::LOC-1::BATCH-2`) never collide.
 * **Consequences**:
-  - The domain contract is 100% consistent across TypeScript validation, Firestore rules, UI input controls, and test suites.
+  - The domain contract is 100% consistent across TypeScript validation, Firestore rules, schema blueprint, UI input controls, and test suites.
   - Zero tolerance for corrupted serial or batch inventory states.
   - Ready for subsequent inventory movement and ledgering phases without architectural debt.
 

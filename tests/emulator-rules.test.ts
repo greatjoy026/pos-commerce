@@ -703,6 +703,32 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         status: 'ACTIVE'
       }));
 
+      // Empty string in non-first position rejected (!hasAny(['']))
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-serial-empty-second'), {
+        id: 'inv-serial-empty-second',
+        sku: 'DEVICE-100',
+        productId: 'prod-dev-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 2,
+        quantityReserved: 0,
+        trackingMode: 'SERIAL',
+        serialNumbers: ['SN-VALID-1', ''],
+        status: 'ACTIVE'
+      }));
+
+      // Duplicate serials rejected by array uniqueness (toSet().size() == size())
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-serial-duplicate'), {
+        id: 'inv-serial-duplicate',
+        sku: 'DEVICE-100',
+        productId: 'prod-dev-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 2,
+        quantityReserved: 0,
+        trackingMode: 'SERIAL',
+        serialNumbers: ['SN-DUPLICATE', 'SN-DUPLICATE'],
+        status: 'ACTIVE'
+      }));
+
       // Valid SERIAL record accepted
       await assertSucceeds(setDoc(doc(invMgr, 'inventory', 'inv-serial-valid'), {
         id: 'inv-serial-valid',
@@ -755,6 +781,20 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityReserved: 0,
         trackingMode: 'BATCH',
         batchNumber: '',
+        status: 'ACTIVE'
+      }));
+
+      // BATCH with structurally invalid expiryDate (< 10 chars) rejected
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-batch-short-expiry'), {
+        id: 'inv-batch-short-expiry',
+        sku: 'DRUG-500',
+        productId: 'prod-drug-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 50,
+        quantityReserved: 0,
+        trackingMode: 'BATCH',
+        batchNumber: 'LOT-2026-X',
+        expiryDate: 'invalid',
         status: 'ACTIVE'
       }));
 

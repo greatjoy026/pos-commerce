@@ -225,19 +225,50 @@ export function isValidAuditLog(data: any): boolean {
 
 export function isValidInventoryRecord(data: any): boolean {
   if (!data || typeof data !== 'object') return false;
-  return (
+  const isBaseValid = (
     typeof data.id === 'string' && data.id.length > 0 && data.id.length <= 128 &&
     typeof data.sku === 'string' && data.sku.length > 0 && data.sku.length <= 100 &&
     typeof data.productId === 'string' && data.productId.length > 0 && data.productId.length <= 128 &&
+    (!('variantId' in data) || (typeof data.variantId === 'string' && data.variantId.length > 0 && data.variantId.length <= 128)) &&
     typeof data.locationId === 'string' && data.locationId.length > 0 && data.locationId.length <= 100 &&
-    typeof data.quantityOnHand === 'number' && data.quantityOnHand >= 0 &&
-    typeof data.quantityReserved === 'number' && data.quantityReserved >= 0 &&
+    Number.isInteger(data.quantityOnHand) && data.quantityOnHand >= 0 &&
+    Number.isInteger(data.quantityReserved) && data.quantityReserved >= 0 &&
     data.quantityReserved <= data.quantityOnHand &&
     typeof data.trackingMode === 'string' && ['QUANTITY', 'SERIAL', 'BATCH', 'NONE'].includes(data.trackingMode) &&
     typeof data.status === 'string' && ['ACTIVE', 'INACTIVE'].includes(data.status) &&
-    (!('reorderPoint' in data) || (typeof data.reorderPoint === 'number' && data.reorderPoint >= 0)) &&
-    (!('reorderQuantity' in data) || (typeof data.reorderQuantity === 'number' && data.reorderQuantity >= 0))
+    (!('createdAt' in data) || (typeof data.createdAt === 'string' && data.createdAt.length >= 10 && data.createdAt.length <= 60)) &&
+    (!('updatedAt' in data) || (typeof data.updatedAt === 'string' && data.updatedAt.length >= 10 && data.updatedAt.length <= 60)) &&
+    (!('reorderPoint' in data) || (Number.isInteger(data.reorderPoint) && data.reorderPoint >= 0)) &&
+    (!('reorderQuantity' in data) || (Number.isInteger(data.reorderQuantity) && data.reorderQuantity >= 0))
   );
+  if (!isBaseValid) return false;
+
+  if (data.trackingMode === 'NONE') {
+    return data.quantityOnHand === 0 && data.quantityReserved === 0 && !('serialNumbers' in data) && !('batchNumber' in data) && !('expiryDate' in data);
+  }
+  if (data.trackingMode === 'QUANTITY') {
+    return !('serialNumbers' in data) && !('batchNumber' in data) && !('expiryDate' in data);
+  }
+  if (data.trackingMode === 'SERIAL') {
+    if ('batchNumber' in data || 'expiryDate' in data) return false;
+    if (!('serialNumbers' in data) || !Array.isArray(data.serialNumbers)) return false;
+    if (data.serialNumbers.length !== data.quantityOnHand) return false;
+    const set = new Set(data.serialNumbers);
+    if (set.size !== data.serialNumbers.length) return false;
+    if (data.serialNumbers.includes('')) return false;
+    if (data.serialNumbers.length === 0) return true;
+    const first = data.serialNumbers[0];
+    const last = data.serialNumbers[data.serialNumbers.length - 1];
+    return typeof first === 'string' && first.length > 0 && first.length <= 100 &&
+           typeof last === 'string' && last.length > 0 && last.length <= 100;
+  }
+  if (data.trackingMode === 'BATCH') {
+    if ('serialNumbers' in data) return false;
+    if (!('batchNumber' in data) || typeof data.batchNumber !== 'string' || data.batchNumber.length === 0 || data.batchNumber.length > 100) return false;
+    if ('expiryDate' in data && (typeof data.expiryDate !== 'string' || data.expiryDate.length < 10 || data.expiryDate.length > 40)) return false;
+    return true;
+  }
+  return false;
 }
 
 export function isValidSettings(data: any): boolean {
@@ -1218,6 +1249,85 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
           total: 50
         };
         assert.strictEqual(isValidEcomOrder(o), true);
+      });
+    });
+
+    // INV-001 / INV-001-F1.1: Authoritative Inventory Record Security Boundary
+    describe('INV-001 / INV-001-F1.1: Authoritative Inventory Record Security Boundary', () => {
+      const validBase = {
+        id: 'inv-test-1',
+        sku: 'SKU-INV-1',
+        productId: 'prod-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 10,
+        quantityReserved: 2,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      };
+
+      test('1. Valid discrete integer inventory record passes schema validation', () => {
+        assert.strictEqual(isValidInventoryRecord(validBase), true);
+      });
+
+      test('2. Rejects fractional quantities at the security rules boundary', () => {
+        assert.strictEqual(isValidInventoryRecord({ ...validBase, quantityOnHand: 10.5 }), false);
+        assert.strictEqual(isValidInventoryRecord({ ...validBase, quantityReserved: 1.25 }), false);
+        assert.strictEqual(isValidInventoryRecord({ ...validBase, reorderPoint: 2.5 }), false);
+      });
+
+      test('3. Rejects reserved quantity exceeding quantity on hand', () => {
+        assert.strictEqual(isValidInventoryRecord({ ...validBase, quantityOnHand: 5, quantityReserved: 6 }), false);
+      });
+
+      test('4. SERIAL mode enforces cardinality equality, uniqueness, and non-empty elements', () => {
+        const serialValid = {
+          ...validBase,
+          quantityOnHand: 3,
+          quantityReserved: 0,
+          trackingMode: 'SERIAL',
+          serialNumbers: ['SN-1', 'SN-2', 'SN-3']
+        };
+        assert.strictEqual(isValidInventoryRecord(serialValid), true);
+
+        // Cardinality mismatch
+        assert.strictEqual(isValidInventoryRecord({ ...serialValid, serialNumbers: ['SN-1', 'SN-2'] }), false);
+
+        // Duplicate serials rejected by array uniqueness (toSet().size() === size())
+        assert.strictEqual(isValidInventoryRecord({ ...serialValid, serialNumbers: ['SN-1', 'SN-2', 'SN-1'] }), false);
+
+        // Empty string in serialNumbers rejected (!hasAny(['']))
+        assert.strictEqual(isValidInventoryRecord({ ...serialValid, serialNumbers: ['SN-1', '', 'SN-3'] }), false);
+
+        // Zero-stock serial record requires empty array
+        const serialZero = {
+          ...validBase,
+          quantityOnHand: 0,
+          quantityReserved: 0,
+          trackingMode: 'SERIAL',
+          serialNumbers: []
+        };
+        assert.strictEqual(isValidInventoryRecord(serialZero), true);
+      });
+
+      test('5. BATCH mode enforces mandatory batchNumber and bounded expiry string', () => {
+        const batchValid = {
+          ...validBase,
+          trackingMode: 'BATCH',
+          batchNumber: 'LOT-99',
+          expiryDate: '2027-12-31T00:00:00.000Z'
+        };
+        assert.strictEqual(isValidInventoryRecord(batchValid), true);
+
+        // Missing batchNumber
+        const noBatch = { ...batchValid };
+        delete (noBatch as any).batchNumber;
+        assert.strictEqual(isValidInventoryRecord(noBatch), false);
+
+        // Empty batchNumber
+        assert.strictEqual(isValidInventoryRecord({ ...batchValid, batchNumber: '' }), false);
+
+        // Out-of-bounds expiry string length
+        assert.strictEqual(isValidInventoryRecord({ ...batchValid, expiryDate: 'bad' }), false);
       });
     });
   });
