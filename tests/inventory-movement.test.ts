@@ -13,7 +13,7 @@ describe('INV-002 — Inventory movement boundaries', () => {
 
   it('rejects zero adjustments before persistence', async () => {
     await assert.rejects(
-      () => recordAdjustment({ inventoryId: 'inv-1', operationId: 'adjust-1', quantityDelta: 0 }),
+      async () => { await recordAdjustment({ inventoryId: 'inv-1', operationId: 'adjust-1', quantityDelta: 0 }); },
       (error: unknown) => error instanceof InventoryDomainError,
     );
   });
@@ -34,7 +34,7 @@ describe('INV-002 — Inventory movement boundaries', () => {
 
   it('does not silently coerce invalid quantities', async () => {
     await assert.rejects(
-      () => recordAdjustment({ inventoryId: 'inv-1', operationId: 'adjust-negative', quantityDelta: -1.25 }),
+      async () => { await recordAdjustment({ inventoryId: 'inv-1', operationId: 'adjust-negative', quantityDelta: -1.25 }); },
       (error: unknown) => error instanceof InventoryDomainError,
     );
     assert.ok(true);
