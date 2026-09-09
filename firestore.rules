@@ -1,39 +1,17 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // ==========================================
-    // Core Helper Functions (Single-Enterprise Identity Boundary)
-    // ==========================================
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    // Single-enterprise isolation: Reject any foreign tenant context
-    function isEnterpriseScope() {
-      return !('tenantId' in request.auth.token) || request.auth.token.tenantId == 'nexus-enterprise';
-    }
-
-    // Role resolution: Custom Claims take precedence; authoritative staff profile is secondary
+    function isAuthenticated() { return request.auth != null; }
+    function isValidId(id) { return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isEnterpriseScope() { return !('tenantId' in request.auth.token) || request.auth.token.tenantId == 'nexus-enterprise'; }
     function hasClaimRole(roleName) {
       return isEnterpriseScope() && (
-        ('role' in request.auth.token && request.auth.token.role == roleName) || 
+        ('role' in request.auth.token && request.auth.token.role == roleName) ||
         ('roles' in request.auth.token && request.auth.token.roles is list && roleName in request.auth.token.roles)
       );
     }
-
     function getStaffRole() {
       return !isEnterpriseScope() ? null :
         (('role' in request.auth.token && request.auth.token.role != null)
@@ -42,7 +20,6 @@ service cloud.firestore {
               ? get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role
               : null));
     }
-
     function isStaff() {
       return isAuthenticated() && isEnterpriseScope() && (
         ('admin' in request.auth.token && request.auth.token.admin == true) ||
@@ -55,267 +32,162 @@ service cloud.firestore {
         ]) ||
         (exists(/databases/$(database)/documents/staff/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role in [
-           'Super Admin', 'Business Owner', 'Store Manager', 'Admin', 'Manager',
-           'Inventory Manager', 'Warehouse Manager', 'Purchasing Officer',
-           'Cashier', 'Sales Associate', 'Sales Manager', 'Accountant',
-           'E-commerce Manager', 'Warehouse Staff'
-         ])
+          'Super Admin', 'Business Owner', 'Store Manager', 'Admin', 'Manager',
+          'Inventory Manager', 'Warehouse Manager', 'Purchasing Officer',
+          'Cashier', 'Sales Associate', 'Sales Manager', 'Accountant',
+          'E-commerce Manager', 'Warehouse Staff'
+        ])
       );
     }
-
     function isSuperAdmin() {
       return isAuthenticated() && isEnterpriseScope() && (
         ('admin' in request.auth.token && request.auth.token.admin == true) ||
         ('isSuperAdmin' in request.auth.token && request.auth.token.isSuperAdmin == true) ||
-        hasClaimRole('Super Admin') ||
-        getStaffRole() == 'Super Admin'
+        hasClaimRole('Super Admin') || getStaffRole() == 'Super Admin'
       );
     }
-
     function isManagerOrAdmin() {
       return isAuthenticated() && isEnterpriseScope() && (
-        isSuperAdmin() ||
-        hasClaimRole('Business Owner') ||
-        hasClaimRole('Store Manager') ||
-        hasClaimRole('Admin') ||
-        hasClaimRole('Manager') ||
+        isSuperAdmin() || hasClaimRole('Business Owner') || hasClaimRole('Store Manager') ||
+        hasClaimRole('Admin') || hasClaimRole('Manager') ||
         getStaffRole() in ['Business Owner', 'Store Manager', 'Admin', 'Manager']
       );
     }
-
     function isInventoryStaff() {
       return isAuthenticated() && isEnterpriseScope() && (
-        isManagerOrAdmin() ||
-        hasClaimRole('Inventory Manager') ||
-        hasClaimRole('Warehouse Manager') ||
+        isManagerOrAdmin() || hasClaimRole('Inventory Manager') || hasClaimRole('Warehouse Manager') ||
         hasClaimRole('Purchasing Officer') ||
         getStaffRole() in ['Inventory Manager', 'Warehouse Manager', 'Purchasing Officer']
       );
     }
-
     function isSalesStaff() {
       return isAuthenticated() && isEnterpriseScope() && (
-        isManagerOrAdmin() ||
-        hasClaimRole('Cashier') ||
-        hasClaimRole('Sales Associate') ||
-        hasClaimRole('Sales Manager') ||
-        getStaffRole() in ['Cashier', 'Sales Associate', 'Sales Manager']
+        isManagerOrAdmin() || hasClaimRole('Cashier') || hasClaimRole('Sales Associate') ||
+        hasClaimRole('Sales Manager') || getStaffRole() in ['Cashier', 'Sales Associate', 'Sales Manager']
       );
     }
+    function hasAnyStaffRole() { return isStaff(); }
 
-    function hasAnyStaffRole() {
-      return isStaff();
-    }
-
-    function hasPermission(perm) {
-      return isSuperAdmin() ||
-        (isAuthenticated() && isEnterpriseScope() && 'permissions' in request.auth.token && request.auth.token.permissions is list && perm in request.auth.token.permissions);
-    }
-
-    // ==========================================
-    // Entity Schema Validation Functions
-    // ==========================================
-    // Internal Product Schema (Contains cost, supplier info, inventory rules)
     function isValidProduct(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
-             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
-             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
-             data.price is number && data.price >= 0 &&
-             data.stock is number && data.stock >= 0 &&
-             data.category is string && data.category.size() <= 100;
+        data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+        data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+        data.price is number && data.price >= 0 && data.stock is number && data.stock >= 0 &&
+        data.category is string && data.category.size() <= 100;
     }
-
-    // Public Product Projection Schema (Safe for public storefront; STRICTLY requires availability status and excludes sensitive cost/supplier/stock fields)
     function isValidPublicProduct(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
-             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
-             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
-             data.price is number && data.price >= 0 &&
-             data.category is string && data.category.size() <= 100 &&
-             // Mandatory availability contract (PROD-001-F2.1)
-             ('availability' in data) &&
-             data.availability is map &&
-             ('status' in data.availability) &&
-             data.availability.status is string &&
-             data.availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'] &&
-             // Sensitive operational and financial fields MUST NOT exist in public projection (SEC-001, PROD-001-F2, PROD-001-F2.1)
-             !('stock' in data) &&
-             !('cost' in data) &&
-             !('costPrice' in data) &&
-             !('reorderPoint' in data) &&
-             !('serialNumbers' in data) &&
-             !('supplier' in data) &&
-             !('batchNumber' in data);
+        data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+        data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+        data.price is number && data.price >= 0 && data.category is string && data.category.size() <= 100 &&
+        ('availability' in data) && data.availability is map && ('status' in data.availability) &&
+        data.availability.status is string && data.availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'] &&
+        !('stock' in data) && !('cost' in data) && !('costPrice' in data) && !('reorderPoint' in data) &&
+        !('serialNumbers' in data) && !('supplier' in data) && !('batchNumber' in data);
     }
-
-    // Public Variant Projection Schema (Mandatory availability, strictly no stock or costPrice)
-    function isValidPublicVariant(variant) {
-      return variant is map &&
-             variant.sku is string && variant.sku.size() > 0 && variant.sku.size() <= 100 &&
-             ('availability' in variant) &&
-             variant.availability is map &&
-             ('status' in variant.availability) &&
-             variant.availability.status is string &&
-             variant.availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'] &&
-             !('stock' in variant) &&
-             !('costPrice' in variant);
+    function isValidPublicVariant(data) {
+      return data is map && data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+        ('availability' in data) && data.availability is map && ('status' in data.availability) &&
+        data.availability.status is string && data.availability.status in ['IN_STOCK', 'LOW_STOCK', 'OUT_OF_STOCK'] &&
+        !('stock' in data) && !('costPrice' in data);
     }
-
     function isValidCustomer(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
-             data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
-             data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
-             (!('loyaltyPoints' in data) || (data.loyaltyPoints is number && data.loyaltyPoints >= 0));
+        data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
+        data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
+        (!('loyaltyPoints' in data) || (data.loyaltyPoints is number && data.loyaltyPoints >= 0));
     }
-
     function isValidStaff(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
-             data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
-             data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
-             data.role is string &&
-             data.status is string && data.status in ['Active', 'Inactive', 'On Leave'] &&
-             // PIN is optional on staff document to support credential segregation
-             (!('pin' in data) || (data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 8));
+        data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
+        data.email is string && data.email.size() > 0 && data.email.size() <= 150 &&
+        data.role is string && data.status is string && data.status in ['Active', 'Inactive', 'On Leave'] &&
+        (!('pin' in data) || (data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 8));
     }
-
     function isValidOrder(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
-             data.date is string && data.date.size() > 0 &&
-             data.subtotal is number && data.subtotal >= 0 &&
-             data.total is number && data.total >= 0 &&
-             data.channel is string && data.channel in ['pos', 'ecom', 'mobile', 'phone'] &&
-             data.status is string && data.status in ['Completed', 'Pending', 'Processing', 'Cancelled', 'Refunded'];
+        data.date is string && data.date.size() > 0 && data.subtotal is number && data.subtotal >= 0 &&
+        data.total is number && data.total >= 0 && data.channel is string &&
+        data.channel in ['pos', 'ecom', 'mobile', 'phone'] && data.status is string &&
+        data.status in ['Completed', 'Pending', 'Processing', 'Cancelled', 'Refunded'];
     }
-
-    // Untrusted Client Input Boundary for Public E-commerce Orders
     function isValidEcomOrder(data) {
-      return data.channel == 'ecom' &&
-             // Browser-created e-commerce orders MUST be initialized as Pending. Client cannot set Completed or Paid!
-             data.status == 'Pending' &&
-             (!('paymentStatus' in data) || data.paymentStatus in ['Pending', 'Unpaid']) &&
-             data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 150 &&
-             data.customerEmail is string && data.customerEmail.size() > 0 && data.customerEmail.size() <= 150 &&
-             data.items is list && data.items.size() > 0 && data.items.size() <= 100 &&
-             data.total is number && data.total >= 0;
+      return data.channel == 'ecom' && data.status == 'Pending' &&
+        (!('paymentStatus' in data) || data.paymentStatus in ['Pending', 'Unpaid']) &&
+        data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 150 &&
+        data.customerEmail is string && data.customerEmail.size() > 0 && data.customerEmail.size() <= 150 &&
+        data.items is list && data.items.size() > 0 && data.items.size() <= 100 && data.total is number && data.total >= 0;
     }
-
     function isValidAuditLog(data) {
-      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
-             data.timestamp is string && data.timestamp.size() > 0 &&
-             data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 150 &&
-             data.action is string && data.action.size() > 0 && data.action.size() <= 100 &&
-             data.module is string && data.module.size() > 0 && data.module.size() <= 50 &&
-             data.details is string && data.details.size() <= 2000;
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 && data.timestamp is string &&
+        data.timestamp.size() > 0 && data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 150 &&
+        data.action is string && data.action.size() > 0 && data.action.size() <= 100 && data.module is string &&
+        data.module.size() > 0 && data.module.size() <= 50 && data.details is string && data.details.size() <= 2000;
     }
-
     function isValidSettings(data) {
-      return data.currency is string && data.currency.size() <= 10 &&
-             data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 200 &&
-             data.taxRate is number && data.taxRate >= 0 && data.taxRate <= 100;
+      return data.currency is string && data.currency.size() <= 10 && data.businessName is string &&
+        data.businessName.size() > 0 && data.businessName.size() <= 200 && data.taxRate is number && data.taxRate >= 0 && data.taxRate <= 100;
     }
-
-    // Public Settings Projection Schema (Safe for public storefront; STRICTLY excludes supervisor PINs, printer/network configs, webhooks, security/integration secrets)
     function isValidPublicSettings(data) {
       return data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 200 &&
-             data.currency is string && data.currency.size() <= 10 &&
-             data.taxRate is number && data.taxRate >= 0 && data.taxRate <= 100 &&
-             // Sensitive internal fields MUST NOT exist in public settings
-             !('supervisorPin' in data) &&
-             !('pin' in data) &&
-             !('secret' in data) &&
-             !('secrets' in data) &&
-             !('apiKey' in data) &&
-             !('apiKeys' in data) &&
-             !('webhookUrl' in data) &&
-             !('webhookUrls' in data) &&
-             !('printerSettings' in data) &&
-             !('networkSettings' in data) &&
-             !('securitySettings' in data) &&
-             !('notificationSettings' in data) &&
-             !('operationalConfig' in data) &&
-             !('credentials' in data);
+        data.currency is string && data.currency.size() <= 10 && data.taxRate is number && data.taxRate >= 0 && data.taxRate <= 100 &&
+        !('supervisorPin' in data) && !('pin' in data) && !('secret' in data) && !('secrets' in data) &&
+        !('apiKey' in data) && !('apiKeys' in data) && !('webhookUrl' in data) && !('webhookUrls' in data) &&
+        !('printerSettings' in data) && !('networkSettings' in data) && !('securitySettings' in data) &&
+        !('notificationSettings' in data) && !('operationalConfig' in data) && !('credentials' in data);
     }
-
-    // Constrained guest e-commerce customer creation (strictly requires ecom_guest channel, prohibits loyalty points manipulation)
     function isValidGuestCustomer(data) {
-      return ('channel' in data && data.channel == 'ecom_guest') &&
-             (!('loyaltyPoints' in data) || data.loyaltyPoints == 0);
+      return ('channel' in data && data.channel == 'ecom_guest') && (!('loyaltyPoints' in data) || data.loyaltyPoints == 0);
     }
-
     function isValidShiftReport(data) {
       return data.reportId is string && data.reportId.size() > 0 && data.reportId.size() <= 128 &&
-             data.terminalId is string && data.terminalId.size() > 0 && data.terminalId.size() <= 100 &&
-             data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 150 &&
-             data.shiftStartTime is string && data.shiftStartTime.size() > 0 &&
-             data.totalSales is number && data.totalSales >= 0;
+        data.terminalId is string && data.terminalId.size() > 0 && data.terminalId.size() <= 100 &&
+        data.staffName is string && data.staffName.size() > 0 && data.staffName.size() <= 150 &&
+        data.shiftStartTime is string && data.shiftStartTime.size() > 0 && data.totalSales is number && data.totalSales >= 0;
     }
 
-    // ==========================================
-    // Internal Inventory Record Schema (INV-001 / INV-001-F1 / INV-001-F1.1)
-    //
-    // FIRESTORE RULES BOUNDARY & LIMITATIONS (INV-001-F1.1):
-    // 1. SERIAL Validation:
-    //    - Rules enforces cardinality equality (serialNumbers.size() == quantityOnHand).
-    //    - Rules enforces array-wide uniqueness (serialNumbers.toSet().size() == serialNumbers.size()).
-    //    - Rules enforces rejection of empty strings across the entire array (!serialNumbers.hasAny([''])).
-    //    - Rules enforces head and tail string size bounds.
-    //    - CEL LIMITATION: Firestore Rules lacks unbounded loops or element iteration macros. Full
-    //      per-element string sanitization and character formatting are enforced in the TypeScript
-    //      domain validator (src/domain/inventory/validation.ts).
-    // 2. BATCH Expiry Date Validation:
-    //    - Rules enforces string type and structural character length bounds (10 <= size <= 40).
-    //    - CEL LIMITATION: Firestore Rules does not possess regex pattern matching or arbitrary ISO 8601
-    //      date parsing. Semantic ISO 8601 validity is authoritatively enforced in the TypeScript domain
-    //      validator (src/domain/inventory/validation.ts).
-    // ==========================================
     function isValidInventoryRecord(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
-             data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
-             data.productId is string && data.productId.size() > 0 && data.productId.size() <= 128 &&
-             (!('variantId' in data) || (data.variantId is string && data.variantId.size() > 0 && data.variantId.size() <= 128)) &&
-             data.locationId is string && data.locationId.size() > 0 && data.locationId.size() <= 100 &&
-             data.quantityOnHand is int && data.quantityOnHand >= 0 &&
-             data.quantityReserved is int && data.quantityReserved >= 0 &&
-             data.quantityReserved <= data.quantityOnHand &&
-             data.trackingMode is string && data.trackingMode in ['QUANTITY', 'SERIAL', 'BATCH', 'NONE'] &&
-             data.status is string && data.status in ['ACTIVE', 'INACTIVE'] &&
-             ('createdAt' in data) && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 60 &&
-             ('updatedAt' in data) && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 60 &&
-             (!('reorderPoint' in data) || (data.reorderPoint is int && data.reorderPoint >= 0)) &&
-             (!('reorderQuantity' in data) || (data.reorderQuantity is int && data.reorderQuantity >= 0)) &&
-             // Tracking Mode Semantic Boundaries (INV-001-F1.1)
-             (data.trackingMode == 'NONE' ?
-               (data.quantityOnHand == 0 && data.quantityReserved == 0 && !('serialNumbers' in data) && !('batchNumber' in data) && !('expiryDate' in data)) :
-              data.trackingMode == 'QUANTITY' ?
-               (!('serialNumbers' in data) && !('batchNumber' in data) && !('expiryDate' in data)) :
-              data.trackingMode == 'SERIAL' ?
-               (!('batchNumber' in data) && !('expiryDate' in data) &&
-                ('serialNumbers' in data) && data.serialNumbers is list &&
-                data.serialNumbers.size() == data.quantityOnHand &&
-                data.serialNumbers.toSet().size() == data.serialNumbers.size() &&
-                !data.serialNumbers.hasAny(['']) &&
-                (data.serialNumbers.size() == 0 ||
-                 (data.serialNumbers[0] is string && data.serialNumbers[0].size() > 0 && data.serialNumbers[0].size() <= 100 &&
-                  data.serialNumbers[data.serialNumbers.size() - 1] is string && data.serialNumbers[data.serialNumbers.size() - 1].size() > 0 && data.serialNumbers[data.serialNumbers.size() - 1].size() <= 100))) :
-              data.trackingMode == 'BATCH' ?
-               (!('serialNumbers' in data) &&
-                ('batchNumber' in data) && data.batchNumber is string && data.batchNumber.size() > 0 && data.batchNumber.size() <= 100 &&
-                (!('expiryDate' in data) || (data.expiryDate is string && data.expiryDate.size() >= 10 && data.expiryDate.size() <= 40))) :
-              false);
+        data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+        data.productId is string && data.productId.size() > 0 && data.productId.size() <= 128 &&
+        (!('variantId' in data) || (data.variantId is string && data.variantId.size() > 0 && data.variantId.size() <= 128)) &&
+        data.locationId is string && data.locationId.size() > 0 && data.locationId.size() <= 100 &&
+        data.quantityOnHand is int && data.quantityOnHand >= 0 && data.quantityReserved is int && data.quantityReserved >= 0 &&
+        data.quantityReserved <= data.quantityOnHand && data.trackingMode is string && data.trackingMode in ['QUANTITY', 'SERIAL', 'BATCH', 'NONE'] &&
+        data.status is string && data.status in ['ACTIVE', 'INACTIVE'] && ('createdAt' in data) && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 60 &&
+        ('updatedAt' in data) && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 60 &&
+        (!('reorderPoint' in data) || (data.reorderPoint is int && data.reorderPoint >= 0)) &&
+        (!('reorderQuantity' in data) || (data.reorderQuantity is int && data.reorderQuantity >= 0)) &&
+        (data.trackingMode == 'NONE' ?
+          (data.quantityOnHand == 0 && data.quantityReserved == 0 && !('serialNumbers' in data) && !('batchNumber' in data) && !('expiryDate' in data)) :
+         data.trackingMode == 'QUANTITY' ?
+          (!('serialNumbers' in data) && !('batchNumber' in data) && !('expiryDate' in data)) :
+         data.trackingMode == 'SERIAL' ?
+          (!('batchNumber' in data) && !('expiryDate' in data) && ('serialNumbers' in data) && data.serialNumbers is list &&
+           data.serialNumbers.size() == data.quantityOnHand && data.serialNumbers.toSet().size() == data.serialNumbers.size() &&
+           !data.serialNumbers.hasAny(['']) && (data.serialNumbers.size() == 0 ||
+            (data.serialNumbers[0] is string && data.serialNumbers[0].size() > 0 && data.serialNumbers[0].size() <= 100 &&
+             data.serialNumbers[data.serialNumbers.size() - 1] is string && data.serialNumbers[data.serialNumbers.size() - 1].size() > 0 && data.serialNumbers[data.serialNumbers.size() - 1].size() <= 100))) :
+         data.trackingMode == 'BATCH' ?
+          (!('serialNumbers' in data) && ('batchNumber' in data) && data.batchNumber is string && data.batchNumber.size() > 0 && data.batchNumber.size() <= 100 &&
+           (!('expiryDate' in data) || (data.expiryDate is string && data.expiryDate.size() >= 10 && data.expiryDate.size() <= 40))) : false);
     }
 
-    // ==========================================
-    // 1. Default Deny Global Boundary
-    // ==========================================
-    match /{document=**} {
-      allow read, write: if false;
+    function isValidMovement(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.inventoryId is string && data.inventoryId.size() > 0 && data.inventoryId.size() <= 128 &&
+        data.sku is string && data.sku.size() > 0 && data.sku.size() <= 100 &&
+        data.locationId is string && data.locationId.size() > 0 && data.locationId.size() <= 100 &&
+        data.movementType is string && data.movementType in ['PURCHASE_RECEIPT', 'SALE', 'RETURN', 'ADJUSTMENT', 'TRANSFER'] &&
+        data.quantityDelta is int && data.quantityDelta != 0 && data.quantityBefore is int && data.quantityBefore >= 0 &&
+        data.quantityAfter is int && data.quantityAfter >= 0 && data.quantityAfter == data.quantityBefore + data.quantityDelta &&
+        data.performedBy is string && data.performedBy == request.auth.uid && data.timestamp is string && data.timestamp.size() >= 10 && data.timestamp.size() <= 60 &&
+        (!('referenceId' in data) || (data.referenceId is string && data.referenceId.size() > 0 && data.referenceId.size() <= 128)) &&
+        (!('reason' in data) || (data.reason is string && data.reason.size() > 0 && data.reason.size() <= 1000));
     }
 
-    // ==========================================
-    // 2. Products Collection (Internal - Sensitive)
-    // ==========================================
-    // Staff-only access: Contains cost price, supplier information, and inventory rules.
-    // Public unauthenticated users are strictly blocked.
+    match /{document=**} { allow read, write: if false; }
+
     match /products/{productId} {
       allow read: if isStaff();
       allow create: if isValidId(productId) && isInventoryStaff() && isValidProduct(incoming());
@@ -323,28 +195,25 @@ service cloud.firestore {
       allow delete: if isValidId(productId) && isManagerOrAdmin();
     }
 
-    // ==========================================
-    // 2.1. Inventory Collection (Authoritative Stock State - INV-001)
-    // ==========================================
-    // Internal operational inventory: strictly staff-only.
-    // Public unauthenticated visitors have NO read, NO create, NO update, NO delete.
     match /inventory/{inventoryId} {
       allow read: if isStaff();
       allow create: if isValidId(inventoryId) && isInventoryStaff() && isValidInventoryRecord(incoming());
+      // Direct balance writes remain restricted to inventory-authorized staff during this migration phase.
+      // INV-002 movement service is the application-level authoritative mutation path.
       allow update: if isValidId(inventoryId) && isInventoryStaff() && isValidInventoryRecord(incoming());
       allow delete: if isValidId(inventoryId) && isManagerOrAdmin();
     }
 
-    // ==========================================
-    // 3. Public Products Projection Collection (Storefront Safe)
-    // ==========================================
-    // Public read for customer storefront; cost prices, suppliers, and internal fields omitted.
+    match /inventory_movements/{movementId} {
+      allow get, list: if isStaff();
+      allow create: if isValidId(movementId) && isInventoryStaff() && isValidMovement(incoming());
+      allow update, delete: if false;
+    }
+
     match /public_products/{productId} {
       allow read: if true;
-      allow create: if isValidId(productId) && isInventoryStaff() && isValidPublicProduct(incoming());
-      allow update: if isValidId(productId) && isInventoryStaff() && isValidPublicProduct(incoming());
+      allow create, update: if isValidId(productId) && isInventoryStaff() && isValidPublicProduct(incoming());
       allow delete: if isValidId(productId) && isManagerOrAdmin();
-
       match /variants/{variantId} {
         allow read: if true;
         allow create, update: if isValidId(variantId) && isInventoryStaff() && isValidPublicVariant(incoming());
@@ -352,121 +221,51 @@ service cloud.firestore {
       }
     }
 
-    // ==========================================
-    // 4. Customers Collection (CRM Directory)
-    // ==========================================
-    // Protected CRM: Sales staff can query directory; customers can read/update own record only.
-    // Anonymous customer creation is strictly restricted to constrained guest e-commerce flow.
     match /customers/{customerId} {
-      allow get: if isValidId(customerId) && (
-        isSalesStaff() || 
-        (isAuthenticated() && (request.auth.uid == customerId || (resource.data != null && 'email' in resource.data && 'email' in request.auth.token && resource.data.email == request.auth.token.email)))
-      );
+      allow get: if isValidId(customerId) && (isSalesStaff() || (isAuthenticated() && (request.auth.uid == customerId || (resource.data != null && 'email' in resource.data && 'email' in request.auth.token && resource.data.email == request.auth.token.email))));
       allow list: if isSalesStaff();
-      allow create: if isValidId(customerId) && isValidCustomer(incoming()) && (
-        isSalesStaff() || 
-        (isAuthenticated() && request.auth.uid == customerId) || 
-        isValidGuestCustomer(incoming())
-      );
-      allow update: if isValidId(customerId) && isValidCustomer(incoming()) && (
-        isSalesStaff() || 
-        (isAuthenticated() && request.auth.uid == customerId)
-      );
+      allow create: if isValidId(customerId) && isValidCustomer(incoming()) && (isSalesStaff() || (isAuthenticated() && request.auth.uid == customerId) || isValidGuestCustomer(incoming()));
+      allow update: if isValidId(customerId) && isValidCustomer(incoming()) && (isSalesStaff() || (isAuthenticated() && request.auth.uid == customerId));
       allow delete: if isValidId(customerId) && isManagerOrAdmin();
     }
 
-    // ==========================================
-    // 5. Staff Collection & Credentials Vault
-    // ==========================================
-    // Strictly authenticated staff directory access.
     match /staff/{staffId} {
       allow get, list: if isAuthenticated() && hasAnyStaffRole();
       allow create: if isValidId(staffId) && isManagerOrAdmin() && isValidStaff(incoming());
-      allow update: if isValidId(staffId) && isValidStaff(incoming()) && (
-        isManagerOrAdmin() || 
-        (request.auth.uid == staffId && incoming().diff(existing()).affectedKeys().hasOnly(['avatar', 'phone', 'lastActive']))
-      );
+      allow update: if isValidId(staffId) && isValidStaff(incoming()) && (isManagerOrAdmin() || (request.auth.uid == staffId && incoming().diff(existing()).affectedKeys().hasOnly(['avatar', 'phone', 'lastActive'])));
       allow delete: if isValidId(staffId) && isSuperAdmin();
     }
+    match /staff_credentials/{staffId} { allow read, write: if false; }
 
-    // Protected Credentials Vault: Isolated credential records, STRICTLY client-inaccessible.
-    // Client SDKs (even Super Admin browser sessions) CANNOT read or write this collection.
-    // Management is strictly restricted to trusted server runtimes / Firebase Admin SDK.
-    match /staff_credentials/{staffId} {
-      allow read, write: if false;
-    }
-
-    // ==========================================
-    // 6. Orders Collection
-    // ==========================================
-    // Sales staff can list all orders.
-    // Customers can ONLY list their own orders (enforces customerId scoping) and retrieve own order.
-    // Public visitors can only create valid untrusted e-commerce orders (Pending status).
     match /orders/{orderId} {
-      allow get: if isValidId(orderId) && (
-        isSalesStaff() || 
-        (isAuthenticated() && resource.data.customerId == request.auth.uid)
-      );
-      allow list: if isSalesStaff() || (
-        isAuthenticated() && 
-        resource.data.customerId == request.auth.uid
-      );
-      allow create: if isValidId(orderId) && isValidOrder(incoming()) && (
-        (incoming().channel == 'pos' && isSalesStaff()) || 
-        (incoming().channel == 'ecom' && isValidEcomOrder(incoming()))
-      );
+      allow get: if isValidId(orderId) && (isSalesStaff() || (isAuthenticated() && resource.data.customerId == request.auth.uid));
+      allow list: if isSalesStaff() || (isAuthenticated() && resource.data.customerId == request.auth.uid);
+      allow create: if isValidId(orderId) && isValidOrder(incoming()) && ((incoming().channel == 'pos' && isSalesStaff()) || (incoming().channel == 'ecom' && isValidEcomOrder(incoming())));
       allow update: if isValidId(orderId) && isSalesStaff() && isValidOrder(incoming());
       allow delete: if isValidId(orderId) && isSuperAdmin();
     }
 
-    // ==========================================
-    // 7. Audit Logs Collection
-    // ==========================================
-    // Strictly append-only immutable ledger; read restricted to manager/auditors.
     match /audit_logs/{logId} {
       allow get, list: if isManagerOrAdmin();
       allow create: if isValidId(logId) && isAuthenticated() && isStaff() && isValidAuditLog(incoming());
       allow update, delete: if false;
     }
-
-    // ==========================================
-    // 8. Internal System Settings Collection (Staff Only)
-    // ==========================================
-    // Internal settings containing supervisor PINs, integrations, printer/network, operational configs.
-    // Public unauthenticated access is strictly blocked.
     match /settings/{settingId} {
       allow read: if isStaff();
       allow create, update: if isValidId(settingId) && isManagerOrAdmin() && isValidSettings(incoming());
       allow delete: if false;
     }
-
-    // ==========================================
-    // 9. Public Settings Projection Collection (Storefront Safe)
-    // ==========================================
-    // Public read for customer storefront (business name, currency, tax rate); internal configs omitted.
     match /public_settings/{settingId} {
       allow read: if true;
       allow create, update: if isValidId(settingId) && isManagerOrAdmin() && isValidPublicSettings(incoming());
       allow delete: if false;
     }
-
-    // ==========================================
-    // 10. Shift Reports Collection
-    // ==========================================
-    // Cashier float reconciliation & Z-reports; permanent financial records (no deletion).
     match /shift_reports/{shiftId} {
       allow get, list: if isSalesStaff() || isManagerOrAdmin();
       allow create: if isValidId(shiftId) && (isSalesStaff() || isManagerOrAdmin()) && isValidShiftReport(incoming());
       allow update: if isValidId(shiftId) && isManagerOrAdmin() && isValidShiftReport(incoming());
       allow delete: if false;
     }
-
-    // ==========================================
-    // 11. Diagnostic Test Connection Document
-    // ==========================================
-    match /test/{testId} {
-      allow read: if isValidId(testId);
-      allow write: if false;
-    }
+    match /test/{testId} { allow read: if isValidId(testId); allow write: if false; }
   }
 }
