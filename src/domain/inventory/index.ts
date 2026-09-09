@@ -1,14 +1,13 @@
 /**
- * Authoritative Inventory Domain Module (INV-001)
+ * Authoritative Inventory Domain Module (INV-001 / INV-002)
  *
- * Public API for the Canonical Inventory Domain:
- * Product -> Variant -> SKU -> Inventory
- *
- * Owns operational stock state, on-hand balances, reservations, locations,
- * and operational thresholds independently from catalog merchandising entities.
+ * Product -> Variant -> SKU -> Inventory remains the ownership boundary.
+ * InventoryRecord owns current stock state; InventoryMovementRecord records
+ * immutable state changes produced by the transactional movement service.
  */
 
 export * from './types';
 export * from './validation';
 export * from './projections';
 export * from './adapters';
+export * from './movements';
