@@ -32,8 +32,9 @@ const MOVEMENT_TYPES: readonly InventoryMovementType[] = ['PURCHASE_RECEIPT','SA
 const OPERATION_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
 
 type NonTransferMovement = Exclude<InventoryMovementType, 'TRANSFER'>;
+type InventoryErrorCode = 'REQUIRED' | 'INVALID_TYPE' | 'OUT_OF_RANGE' | 'INVARIANT_VIOLATION' | 'INVALID_ENUM';
 
-function fail(message: string, field: string, code: string): never {
+function fail(message: string, field: string, code: InventoryErrorCode): never {
   throw new InventoryDomainError(message, [{ field, message, code }]);
 }
 function assertPositiveInteger(value: number, field: string): void {
