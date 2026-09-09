@@ -24,14 +24,23 @@
 
 ---
 
-### RISK-003: Inventory Domain Fragmentation (HIGH / P1)
+### RISK-003: Inventory Domain Fragmentation & Movement Ledgering (HIGH / P1)
 * **Severity**: **HIGH (P1)**
 * **Category**: Inventory Accounting / Financial Integrity
-* **Identified in**: `src/App.tsx` (`handleProcessOrder`, `handleQuickReorder`)
-* **Status**: `NOT RESOLVED / INV-001` — Pending `INV-001`.
-* **Description**: Inventory deduction logic is currently embedded directly in UI state handlers in `App.tsx`. Stock is mutated as a plain integer rather than generated via immutable stock ledger movements. Serial and batch tracking are defined in interfaces but not enforced during POS checkout.
-* **Impact**: Inability to perform financial inventory valuation audits (FIFO/LIFO), lack of auditability for shrinkage, and risk of negative stock during concurrent checkouts.
-* **Required Follow-up Task**: `INV-001 — SKU and Inventory Architecture`.
+* **Identified in**: `src/App.tsx` (`handleProcessOrder`, `handleQuickReorder`), `src/services/dbService.ts`
+* **Status**: `PARTIALLY MITIGATED (INV-001-F1 / INV-001-F1.1) — MOVEMENT LEDGERING NOT RESOLVED`
+* **Mitigation Progress**:
+  1. **Quantity Precision Model**: Ratified Option A (discrete non-negative integer inventory units). Fractional quantities, `NaN`, and `Infinity` are rejected at the TypeScript domain boundary and Firestore security rules boundary.
+  2. **UOM Relationship**: Fractional physical reality is modeled through packaging conversions with discrete base units and integer multipliers (`PackagingUOMBuilder`). Any continuous measure (e.g. weighables) must use fixed-point scaling or explicit future migration.
+  3. **SERIAL Invariant**: Invariant `quantityOnHand == serialNumbers.length` strictly enforced with non-empty strings, zero duplicates, and zero-stock empty array semantics.
+  4. **BATCH Identity**: Mandatory non-empty `batchNumber`, ISO 8601 `expiryDate`, and multi-batch coexistence verified.
+  5. **Logical Identity**: Canonical composite keys (`SKU::LOCATION` for standard/serial, `SKU::LOCATION::BATCH` for batch) derived deterministically.
+* **Remaining Unresolved Architectural Gaps**:
+  * **Movement Integrity Not Resolved**: Stock deduction during POS checkout and e-commerce checkout still mutates ad-hoc balance values in memory and Firestore documents without immutable `StockMovementRecord` double-entry ledger transactions.
+  * **Persistence Uniqueness Limitations**: Firestore client-side SDK lacks collection-wide composite unique constraints on `(sku, locationId, batchNumber)`. Enforcing single active balance documents per logical identity requires transactional document ID standardization (`inv_${key}`) or server-side Cloud Function mediation.
+  * **Future Movement Architecture**: Deferred to future task (`INV-002: Ledger Movements & Transactional Allocation`), where reservations, stock intake, shrinkage adjustments, and POS fulfillment will be driven by append-only ledger events with optimistic concurrency.
+* **Impact**: Inventory state models are now formally validated and protected against invalid data entry or corrupt serial/batch states, but inventory movement integrity and concurrency protection remain open.
+* **Required Follow-up Task**: `INV-002 — Ledger Movements & Transactional Allocation`.
 
 ---
 

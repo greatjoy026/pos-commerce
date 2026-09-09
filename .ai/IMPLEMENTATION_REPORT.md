@@ -789,5 +789,105 @@ Address the targeted review items from the architectural supervisor on PROD-001-
 
 **PROD-001-F2.1 CORRECTION COMPLETE — READY FOR SUPERVISOR REVIEW**
 
+---
+
+# Implementation Report
+
+**Task ID**: INV-001-F1.1  
+**Task Name**: Authoritative Inventory Quantity & Tracking Contract Finalization  
+**Status**: `IMPLEMENTATION COMPLETE — AWAITING ARCHITECTURAL REVIEW`  
+**Author**: Gemini (Implementation Lead)  
+**Date**: 2026-09-08  
+
+---
+
+## 1. Objective & Supervisory Review Scope
+
+Address all supervisory contract questions arising from the `INV-001-F1` review:
+1. **Authoritative Quantity Decision**: Formally ratify and enforce the quantity precision model across the TypeScript domain layer, Firestore security rules, and user interface inputs.
+2. **UOM Relationship**: Analyze existing packaging and pricing multipliers (`PackagingUOMBuilder`) to align the inventory quantity model with discrete base unit tracking.
+3. **SERIAL Tracking Invariants**: Establish strict mathematical and semantic invariants governing serialized inventory.
+4. **BATCH Tracking Invariants**: Establish strict invariants governing lot-tracked inventory and ensure multi-batch coexistence per SKU and location.
+5. **Logical Identity Rules**: Formalize canonical composite document keys to prevent cross-location and cross-batch collisions.
+6. **Persistence & Firestore Alignment**: Align Firestore security rules (`firestore.rules`) and schema blueprints (`firebase-blueprint.json`) with integer quantity and tracking rules.
+7. **Document Limitations & Deferred Work**: Explicitly document persistence uniqueness constraints and scope boundaries, without declaring inventory movement integrity resolved.
+
+---
+
+## 2. Architectural Decisions & Contract Specifications
+
+### 2.1 Quantity Precision Model: Option A (Discrete Integer Inventory)
+* **Decision**: Option A (strictly non-negative discrete integers: `Number.isInteger(qty) && qty >= 0`) is ratified as the authoritative inventory quantity contract across all system layers.
+* **Rationale**:
+  * **UOM & Packaging Harmony**: The catalog architecture handles fractional physical needs via discrete countable base units paired with integer multipliers (e.g. `PackagingUOMBuilder` defines 1 box = 24 cans or 1 pack = 6 bottles).
+  * **Precision Safety**: Decimal stock values introduce floating-point drift (`0.1 + 0.2 = 0.30000000000000004`), causing reconciliation anomalies in stock ledgers, financial audits, and multi-channel allocations.
+  * **Cross-Layer Symmetry**: TypeScript domain validation (`src/domain/inventory/validation.ts`) and Firestore security rules (`firestore.rules`) enforce non-negative integers (`data.quantityOnHand is int && data.quantityOnHand >= 0`).
+  * **Future Compatibility**: Continuous measure goods (e.g. weighable bulk produce) will be introduced in future phases through fixed-point integer scaling (e.g. integer grams/milligrams) or a deliberate fractional migration.
+* **Boundary Enforcement**:
+  * TypeScript validation rejects fractional values (e.g. `1.5`), `NaN`, and `Infinity` with structured `INVALID_TYPE` errors.
+  * Firestore rules reject non-integer numbers for `quantityOnHand`, `quantityReserved`, `reorderPoint`, and `reorderQuantity`.
+  * UI input fields across `StepInventory.tsx`, `Step3Inventory.tsx`, `Step2Variants.tsx`, and `PackagingUOMBuilder.tsx` enforce `step="1"` and `parseInt(e.target.value, 10)`.
+
+### 2.2 Invariants Governing SERIAL Tracking Mode
+* **Exact Count Matching**: `quantityOnHand == serialNumbers.length` strictly enforced.
+* **Item Integrity**: Every item in `serialNumbers` must be a non-empty string (`size > 0`).
+* **Uniqueness**: Duplicate serial numbers within a record are strictly rejected.
+* **Zero Inventory Semantics**: When `quantityOnHand == 0`, `serialNumbers` must be an empty array (`[]`).
+* **Field Isolation**: Batch fields (`batchNumber`, `expiryDate`) are strictly forbidden when `trackingMode == 'SERIAL'`.
+
+### 2.3 Invariants Governing BATCH Tracking Mode
+* **Batch Identity**: `batchNumber` is mandatory, non-empty, and constrained in length (`1 <= size <= 100`).
+* **Expiry Date**: `expiryDate` (when provided) must be a valid ISO 8601 string.
+* **Field Isolation**: `serialNumbers` is strictly forbidden when `trackingMode == 'BATCH'`.
+* **Multi-Batch Coexistence**: Multiple batches of the same SKU and location coexist concurrently as independent inventory records without overwriting.
+
+### 2.4 Logical Identity & Key Semantics
+* Canonical composite keys are derived deterministically via `getInventoryRecordKey()`:
+  * For `QUANTITY`, `SERIAL`, and `NONE`: `${sku}::${locationId.toLowerCase()}` (e.g., `SKU-100::loc-warehouse`).
+  * For `BATCH`: `${sku}::${locationId.toLowerCase()}::${batchNumber}` (e.g., `SKU-100::loc-warehouse::LOT-2026-A`).
+* Boundary verification tests confirm that records across different locations (`SKU-A::LOC-1` vs `SKU-A::LOC-2`) and distinct batches (`SKU-A::LOC-1::LOT-1` vs `SKU-A::LOC-1::LOT-2`) generate non-colliding document keys.
+
+---
+
+## 3. Verification & Automated Test Suite
+
+### 3.1 Test Coverage Additions
+* **Domain Test Suite (`tests/inventory-domain.test.ts`)**: Added Suite 6 (27 new assertions) verifying:
+  * Integer quantity acceptance (`0`, `1`, `10`) and rejection of `1.5`, `NaN`, `Infinity`, and fractional reorder points/quantities.
+  * SERIAL matching count, mismatched count, duplicate serials, empty serial strings, zero-stock, and invalid array types.
+  * BATCH valid lots, empty lot rejection, invalid expiry formats, and coexistence of multiple batches for the same SKU/location.
+  * Logical identity collision prevention across locations and batches.
+* **Firestore Security Rules Test Suite (`tests/emulator-rules.test.ts`)**:
+  * Rejection of fractional quantities (`1.5`, `2.75`) for inventory mutations.
+  * Rejection of SERIAL mismatched count and empty serial string items.
+  * Acceptance of valid SERIAL records and zero-stock records.
+  * Rejection of BATCH missing/empty `batchNumber`.
+  * Acceptance of multiple distinct batch documents for the same SKU and location.
+
+### 3.2 Actual Test Results
+
+| Test Suite | Target File | Tests | Pass / Fail |
+|---|---|---|---|
+| **Inventory Domain Engine & Contracts** | `tests/inventory-domain.test.ts` | **75 / 75** | **PASS (0 fail)** |
+| **Product Domain & SKU Architecture** | `tests/product-domain.test.ts` | **33 / 33** | **PASS (0 fail)** |
+| **Firestore Authorization & Security Rules** | `tests/authorization.test.ts` | **82 / 82** | **PASS (0 fail)** |
+| **Total Automated Regression Suite** | `npm test` | **190 / 190** | **PASS (0 fail)** |
+| **Static Type Checking** | `npm run lint` (`tsc --noEmit`) | Clean | **PASS (0 errors)** |
+| **Production Application Build** | `npm run build` (`vite build`) | Clean | **PASS (0 errors)** |
+
+---
+
+## 4. Remaining Limitations & Deferred Work
+
+* **Movement Integrity NOT Resolved**: Stock deductions during POS checkout and e-commerce checkout still occur via transitional ad-hoc mutations in memory and Firestore documents. Double-entry immutable `StockMovementRecord` events and transactional allocation are deferred to `INV-002: Ledger Movements & Transactional Allocation`.
+* **Persistence Uniqueness Limitations**: Firestore client SDK lacks declarative composite unique indexes across multiple fields `(sku, locationId, batchNumber)`. Enforcing single active balance documents per logical identity requires transactional document ID standardization (`inv_${key}`) or server-side Cloud Function mediation.
+* **POS Offline Buffering**: Offline stock reservation buffering and multi-tier POS unit selection are deferred to `POS-001`.
+* **Production Deployment Status**: Intentionally held pending architectural supervisor review. No merge or production deployment performed.
+
+---
+
+INV-001-F1.1 IMPLEMENTATION COMPLETE — AWAITING ARCHITECTURAL REVIEW
+
+
 
 

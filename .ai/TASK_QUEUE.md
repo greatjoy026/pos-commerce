@@ -2,6 +2,31 @@
 
 ## 1. Active Tasks
 
+### `INV-001-F1.1 — Inventory Quantity & Tracking Contract Finalization`
+* **Priority**: P1 (Architectural Supervisor Review Hardening)
+* **Type**: Domain Architecture / Contract Hardening
+* **Owner**: Gemini (Implementation Lead)
+* **Status**: `IMPLEMENTATION COMPLETE — AWAITING ARCHITECTURAL REVIEW`
+* **Dependencies**: `INV-001-F1`, `PROD-001-F2.1`, `SEC-001`
+* **Objective**: Addressed all supervisory contract questions for INV-001-F1:
+  * **Option A Ratification**: Formalized authoritative non-negative discrete integer inventory contract across TypeScript domain, Firestore rules, and UI inputs. Fractional, NaN, and Infinity inputs are rejected at all boundaries.
+  * **SERIAL Tracking Hardening**: Validated `quantityOnHand == serialNumbers.length`, distinct non-empty serial strings, zero-stock empty array semantics, and isolation from batch fields.
+  * **BATCH Tracking Hardening**: Mandated non-empty `batchNumber`, ISO 8601 expiry, and multi-batch coexistence per SKU and location.
+  * **Logical Identity Rules**: Formulated deterministic key generation `getInventoryRecordKey()` (`SKU::LOCATION` and `SKU::LOCATION::BATCH`).
+  * **Test Coverage**: Added Suite 6 to `tests/inventory-domain.test.ts` and hardened Firestore emulator unit tests in `tests/emulator-rules.test.ts` (190 total tests passing).
+* **Limitations Documented**: Collection-level uniqueness constraints in Firestore client SDK and movement ledgering are deferred to `INV-002`.
+
+---
+
+### `INV-001-F1 — Authoritative Inventory Entity & Multi-Location Foundation`
+* **Priority**: P1
+* **Type**: Domain Architecture / Inventory Foundation
+* **Owner**: Gemini (Implementation Lead)
+* **Status**: `IMPLEMENTATION COMPLETE — AWAITING REVIEW`
+* **Dependencies**: `PROD-001-F2.1`, `SEC-001`
+
+---
+
 ### `PROD-001-F2.1 — Final Validation and Public Contract Correction`
 * **Priority**: P1 (Architectural Supervisor Review Correction)
 * **Type**: Domain Architecture / Boundary Validation
