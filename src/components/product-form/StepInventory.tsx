@@ -253,7 +253,7 @@ export default function StepInventory({
                 min="0"
                 step="1"
                 value={stock}
-                onChange={e => setStock(Math.max(0, Number(e.target.value) || 0))}
+                onChange={e => setStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
                 className="w-full px-3 py-2 bg-transparent text-sm font-bold text-slate-900 focus:outline-hidden"
               />
               <span className="px-2.5 py-2 text-xs font-semibold text-slate-500 bg-slate-100 border-l border-slate-200">
@@ -272,7 +272,7 @@ export default function StepInventory({
               min="0"
               step="1"
               value={reorderPoint}
-              onChange={e => setReorderPoint(Math.max(0, Number(e.target.value) || 0))}
+              onChange={e => setReorderPoint(Math.max(0, parseInt(e.target.value, 10) || 0))}
               placeholder="10"
               className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-100 transition-all"
             />

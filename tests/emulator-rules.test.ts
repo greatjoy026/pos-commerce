@@ -642,6 +642,149 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
       await assertFails(deleteDoc(doc(invMgr, 'inventory', 'inv-scan-100')));
     });
+
+    // ------------------------------------------------------------------------
+    // INV-001-F1.1 Hardening: Quantity & Tracking Boundaries
+    // ------------------------------------------------------------------------
+    it('REJECTS fractional quantities in inventory records (INV-001-F1.1 Option A)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+      
+      // Fractional onHand rejected
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-frac-1'), {
+        id: 'inv-frac-1',
+        sku: 'PRINT-200',
+        productId: 'prod-200',
+        locationId: 'loc-main-store',
+        quantityOnHand: 1.5,
+        quantityReserved: 0,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      }));
+
+      // Fractional reserved rejected
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-frac-2'), {
+        id: 'inv-frac-2',
+        sku: 'PRINT-200',
+        productId: 'prod-200',
+        locationId: 'loc-main-store',
+        quantityOnHand: 10,
+        quantityReserved: 2.75,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE'
+      }));
+    });
+
+    it('ENFORCES SERIAL tracking mode invariants at Firestore boundary (INV-001-F1.1)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+
+      // Mismatched count (onHand = 3, serials = 2) rejected
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-serial-bad-count'), {
+        id: 'inv-serial-bad-count',
+        sku: 'DEVICE-100',
+        productId: 'prod-dev-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 3,
+        quantityReserved: 0,
+        trackingMode: 'SERIAL',
+        serialNumbers: ['SN-01', 'SN-02'],
+        status: 'ACTIVE'
+      }));
+
+      // Empty string serial number in array rejected
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-serial-empty-item'), {
+        id: 'inv-serial-empty-item',
+        sku: 'DEVICE-100',
+        productId: 'prod-dev-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 1,
+        quantityReserved: 0,
+        trackingMode: 'SERIAL',
+        serialNumbers: [''],
+        status: 'ACTIVE'
+      }));
+
+      // Valid SERIAL record accepted
+      await assertSucceeds(setDoc(doc(invMgr, 'inventory', 'inv-serial-valid'), {
+        id: 'inv-serial-valid',
+        sku: 'DEVICE-100',
+        productId: 'prod-dev-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 2,
+        quantityReserved: 0,
+        trackingMode: 'SERIAL',
+        serialNumbers: ['SN-ALPHA', 'SN-BETA'],
+        status: 'ACTIVE'
+      }));
+
+      // Valid zero-stock SERIAL record accepted
+      await assertSucceeds(setDoc(doc(invMgr, 'inventory', 'inv-serial-zero'), {
+        id: 'inv-serial-zero',
+        sku: 'DEVICE-100',
+        productId: 'prod-dev-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 0,
+        quantityReserved: 0,
+        trackingMode: 'SERIAL',
+        serialNumbers: [],
+        status: 'ACTIVE'
+      }));
+    });
+
+    it('ENFORCES BATCH tracking mode invariants and allows multiple batches to coexist (INV-001-F1.1)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+
+      // Missing batchNumber rejected
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-batch-missing-num'), {
+        id: 'inv-batch-missing-num',
+        sku: 'DRUG-500',
+        productId: 'prod-drug-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 50,
+        quantityReserved: 0,
+        trackingMode: 'BATCH',
+        status: 'ACTIVE'
+      }));
+
+      // Empty batchNumber rejected
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-batch-empty-num'), {
+        id: 'inv-batch-empty-num',
+        sku: 'DRUG-500',
+        productId: 'prod-drug-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 50,
+        quantityReserved: 0,
+        trackingMode: 'BATCH',
+        batchNumber: '',
+        status: 'ACTIVE'
+      }));
+
+      // Multiple batches for same SKU & location succeed at distinct document IDs
+      await assertSucceeds(setDoc(doc(invMgr, 'inventory', 'inv-drug-500-loc1-batch1'), {
+        id: 'inv-drug-500-loc1-batch1',
+        sku: 'DRUG-500',
+        productId: 'prod-drug-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 40,
+        quantityReserved: 0,
+        trackingMode: 'BATCH',
+        batchNumber: 'LOT-2026-001',
+        expiryDate: '2027-06-30T00:00:00.000Z',
+        status: 'ACTIVE'
+      }));
+
+      await assertSucceeds(setDoc(doc(invMgr, 'inventory', 'inv-drug-500-loc1-batch2'), {
+        id: 'inv-drug-500-loc1-batch2',
+        sku: 'DRUG-500',
+        productId: 'prod-drug-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 60,
+        quantityReserved: 5,
+        trackingMode: 'BATCH',
+        batchNumber: 'LOT-2026-002',
+        expiryDate: '2027-12-31T00:00:00.000Z',
+        status: 'ACTIVE'
+      }));
+    });
   });
 
   // ==========================================

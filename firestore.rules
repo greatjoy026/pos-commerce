@@ -251,7 +251,7 @@ service cloud.firestore {
     }
 
     // ==========================================
-    // Internal Inventory Record Schema (INV-001 / INV-001-F1)
+    // Internal Inventory Record Schema (INV-001 / INV-001-F1 / INV-001-F1.1)
     // ==========================================
     function isValidInventoryRecord(data) {
       return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
@@ -259,25 +259,28 @@ service cloud.firestore {
              data.productId is string && data.productId.size() > 0 && data.productId.size() <= 128 &&
              (!('variantId' in data) || (data.variantId is string && data.variantId.size() > 0 && data.variantId.size() <= 128)) &&
              data.locationId is string && data.locationId.size() > 0 && data.locationId.size() <= 100 &&
-             data.quantityOnHand is number && data.quantityOnHand >= 0 &&
-             data.quantityReserved is number && data.quantityReserved >= 0 &&
+             data.quantityOnHand is int && data.quantityOnHand >= 0 &&
+             data.quantityReserved is int && data.quantityReserved >= 0 &&
              data.quantityReserved <= data.quantityOnHand &&
              data.trackingMode is string && data.trackingMode in ['QUANTITY', 'SERIAL', 'BATCH', 'NONE'] &&
              data.status is string && data.status in ['ACTIVE', 'INACTIVE'] &&
-             (('createdAt' in data) && (data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 60)) &&
-             (('updatedAt' in data) && (data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 60)) &&
-             (!('reorderPoint' in data) || (data.reorderPoint is number && data.reorderPoint >= 0)) &&
-             (!('reorderQuantity' in data) || (data.reorderQuantity is number && data.reorderQuantity >= 0)) &&
-             // Tracking Mode Semantic Boundaries
+             (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 60)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 60)) &&
+             (!('reorderPoint' in data) || (data.reorderPoint is int && data.reorderPoint >= 0)) &&
+             (!('reorderQuantity' in data) || (data.reorderQuantity is int && data.reorderQuantity >= 0)) &&
+             // Tracking Mode Semantic Boundaries (INV-001-F1.1)
              (data.trackingMode == 'NONE' ?
                (data.quantityOnHand == 0 && data.quantityReserved == 0 && !('serialNumbers' in data) && !('batchNumber' in data) && !('expiryDate' in data)) :
               data.trackingMode == 'QUANTITY' ?
                (!('serialNumbers' in data) && !('batchNumber' in data) && !('expiryDate' in data)) :
               data.trackingMode == 'SERIAL' ?
-               (!('batchNumber' in data) && !('expiryDate' in data) && (!('serialNumbers' in data) || data.serialNumbers is list)) :
+               (!('batchNumber' in data) && !('expiryDate' in data) &&
+                ('serialNumbers' in data) && data.serialNumbers is list &&
+                data.serialNumbers.size() == data.quantityOnHand &&
+                (data.serialNumbers.size() == 0 || (data.serialNumbers[0] is string && data.serialNumbers[0].size() > 0 && data.serialNumbers[0].size() <= 100))) :
               data.trackingMode == 'BATCH' ?
                (!('serialNumbers' in data) &&
-                (!('batchNumber' in data) || (data.batchNumber is string && data.batchNumber.size() > 0 && data.batchNumber.size() <= 100)) &&
+                ('batchNumber' in data) && data.batchNumber is string && data.batchNumber.size() > 0 && data.batchNumber.size() <= 100 &&
                 (!('expiryDate' in data) || (data.expiryDate is string && data.expiryDate.size() >= 10 && data.expiryDate.size() <= 40))) :
               false);
     }

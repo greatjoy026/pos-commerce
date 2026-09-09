@@ -105,22 +105,22 @@ export interface InventoryRecord {
  * CRITICAL: availableQuantity is a derived calculation, NOT an independently
  * mutable source of truth.
  *
- * ARCHITECTURAL CONTRACT:
- * - Operates ONLY on validated finite numeric values.
+ * ARCHITECTURAL CONTRACT (Option A - Integer Inventory):
+ * - Operates ONLY on validated finite non-negative integer values.
  * - Invariant: availableQuantity = quantityOnHand - quantityReserved
  * - Never uses Math.max(0, ...) to hide invalid domain state.
- * - If inputs are invalid, non-finite, negative, or if reserved > onHand,
+ * - If inputs are invalid, non-finite, non-integer, negative, or if reserved > onHand,
  *   throws an explicit error rather than silently returning zero.
  */
 export function calculateAvailableQuantity(record: Pick<InventoryRecord, 'quantityOnHand' | 'quantityReserved'>): number {
   const onHand = record.quantityOnHand;
   const reserved = record.quantityReserved;
 
-  if (typeof onHand !== 'number' || !Number.isFinite(onHand)) {
-    throw new Error(`calculateAvailableQuantity: quantityOnHand must be a finite number, received ${String(onHand)}`);
+  if (typeof onHand !== 'number' || !Number.isFinite(onHand) || !Number.isInteger(onHand)) {
+    throw new Error(`calculateAvailableQuantity: quantityOnHand must be a finite integer, received ${String(onHand)}`);
   }
-  if (typeof reserved !== 'number' || !Number.isFinite(reserved)) {
-    throw new Error(`calculateAvailableQuantity: quantityReserved must be a finite number, received ${String(reserved)}`);
+  if (typeof reserved !== 'number' || !Number.isFinite(reserved) || !Number.isInteger(reserved)) {
+    throw new Error(`calculateAvailableQuantity: quantityReserved must be a finite integer, received ${String(reserved)}`);
   }
   if (onHand < 0) {
     throw new Error(`calculateAvailableQuantity: quantityOnHand cannot be negative, received ${onHand}`);
@@ -138,24 +138,32 @@ export function calculateAvailableQuantity(record: Pick<InventoryRecord, 'quanti
 /**
  * Deterministically derives the logical inventory identity key.
  *
- * LOGICAL IDENTITY BOUNDARY:
- * For standard quantity inventory, the logical uniqueness boundary is:
- *   SKU + locationId
+ * LOGICAL IDENTITY BOUNDARY (INV-001-F1.1):
+ * - For standard quantity inventory (QUANTITY, NONE) and aggregate serial pools:
+ *   SKU + locationId -> `SKU::LOCATION`
+ * - For batch-tracked inventory (BATCH):
+ *   SKU + locationId + batchNumber -> `SKU::LOCATION::BATCH`
+ *   This explicitly allows multiple batches of the same SKU to coexist at the same location.
  *
- * Exactly one authoritative active quantity balance exists for a given SKU at a given location.
- *
- * FUTURE EXTENSION:
- * For batch-tracked (BATCH) or serial-tracked (SERIAL) inventory, the logical uniqueness
- * boundary may be extended in future phases to (SKU + locationId + batchNumber) or individual
- * serial identifiers.
+ * FUTURE SERIAL ARCHITECTURE:
+ * When item-level serialized ledgering is introduced in subsequent phases, individual
+ * serial identities (e.g. `SKU::LOCATION::SERIAL`) will represent single physical items.
  *
  * NOTE: This domain helper represents logical identity semantics. It does not alone
  * provide database concurrency protection or distributed locking (which belong to
  * transactional persistence layers).
  */
-export function getInventoryRecordKey(record: Pick<InventoryRecord, 'sku' | 'locationId'>): string {
+export function getInventoryRecordKey(
+  record: Pick<InventoryRecord, 'sku' | 'locationId'> & Partial<Pick<InventoryRecord, 'trackingMode' | 'batchNumber'>>
+): string {
   const sku = typeof record.sku === 'string' ? record.sku.trim().toUpperCase() : '';
   const locationId = typeof record.locationId === 'string' ? record.locationId.trim().toLowerCase() : '';
+
+  if (record.trackingMode === 'BATCH') {
+    const batch = typeof record.batchNumber === 'string' ? record.batchNumber.trim().toUpperCase() : '';
+    return `${sku}::${locationId}::${batch}`;
+  }
+
   return `${sku}::${locationId}`;
 }
 

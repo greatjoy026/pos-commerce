@@ -97,24 +97,24 @@ export function validateInventoryRecord(input: unknown): InventoryValidationResu
     errors.push({ field: 'locationId', message: 'locationId is required and must be a non-empty string', code: 'REQUIRED' });
   }
 
-  // 5. Quantity On Hand validation (Invariant 1)
-  if (typeof raw.quantityOnHand !== 'number' || !Number.isFinite(raw.quantityOnHand)) {
-    errors.push({ field: 'quantityOnHand', message: 'quantityOnHand must be a valid finite number', code: 'INVALID_TYPE' });
+  // 5. Quantity On Hand validation (Invariant 1: non-negative integer)
+  if (typeof raw.quantityOnHand !== 'number' || !Number.isFinite(raw.quantityOnHand) || !Number.isInteger(raw.quantityOnHand)) {
+    errors.push({ field: 'quantityOnHand', message: 'quantityOnHand must be a valid finite integer', code: 'INVALID_TYPE' });
   } else if (raw.quantityOnHand < 0) {
     errors.push({ field: 'quantityOnHand', message: 'quantityOnHand cannot be negative', code: 'OUT_OF_RANGE' });
   }
 
-  // 6. Quantity Reserved validation (Invariant 2)
-  if (typeof raw.quantityReserved !== 'number' || !Number.isFinite(raw.quantityReserved)) {
-    errors.push({ field: 'quantityReserved', message: 'quantityReserved must be a valid finite number', code: 'INVALID_TYPE' });
+  // 6. Quantity Reserved validation (Invariant 2: non-negative integer)
+  if (typeof raw.quantityReserved !== 'number' || !Number.isFinite(raw.quantityReserved) || !Number.isInteger(raw.quantityReserved)) {
+    errors.push({ field: 'quantityReserved', message: 'quantityReserved must be a valid finite integer', code: 'INVALID_TYPE' });
   } else if (raw.quantityReserved < 0) {
     errors.push({ field: 'quantityReserved', message: 'quantityReserved cannot be negative', code: 'OUT_OF_RANGE' });
   }
 
   // 7. Reservation Invariant (Invariant 3: quantityReserved <= quantityOnHand)
   if (
-    typeof raw.quantityOnHand === 'number' && Number.isFinite(raw.quantityOnHand) &&
-    typeof raw.quantityReserved === 'number' && Number.isFinite(raw.quantityReserved)
+    typeof raw.quantityOnHand === 'number' && Number.isFinite(raw.quantityOnHand) && Number.isInteger(raw.quantityOnHand) &&
+    typeof raw.quantityReserved === 'number' && Number.isFinite(raw.quantityReserved) && Number.isInteger(raw.quantityReserved)
   ) {
     if (raw.quantityReserved > raw.quantityOnHand) {
       errors.push({
@@ -125,19 +125,19 @@ export function validateInventoryRecord(input: unknown): InventoryValidationResu
     }
   }
 
-  // 8. Reorder Point (optional)
+  // 8. Reorder Point (optional non-negative integer)
   if (raw.reorderPoint !== undefined) {
-    if (typeof raw.reorderPoint !== 'number' || !Number.isFinite(raw.reorderPoint)) {
-      errors.push({ field: 'reorderPoint', message: 'reorderPoint must be a finite number', code: 'INVALID_TYPE' });
+    if (typeof raw.reorderPoint !== 'number' || !Number.isFinite(raw.reorderPoint) || !Number.isInteger(raw.reorderPoint)) {
+      errors.push({ field: 'reorderPoint', message: 'reorderPoint must be a finite integer', code: 'INVALID_TYPE' });
     } else if (raw.reorderPoint < 0) {
       errors.push({ field: 'reorderPoint', message: 'reorderPoint cannot be negative', code: 'OUT_OF_RANGE' });
     }
   }
 
-  // 9. Reorder Quantity (optional)
+  // 9. Reorder Quantity (optional non-negative integer)
   if (raw.reorderQuantity !== undefined) {
-    if (typeof raw.reorderQuantity !== 'number' || !Number.isFinite(raw.reorderQuantity)) {
-      errors.push({ field: 'reorderQuantity', message: 'reorderQuantity must be a finite number', code: 'INVALID_TYPE' });
+    if (typeof raw.reorderQuantity !== 'number' || !Number.isFinite(raw.reorderQuantity) || !Number.isInteger(raw.reorderQuantity)) {
+      errors.push({ field: 'reorderQuantity', message: 'reorderQuantity must be a finite integer', code: 'INVALID_TYPE' });
     } else if (raw.reorderQuantity < 0) {
       errors.push({ field: 'reorderQuantity', message: 'reorderQuantity cannot be negative', code: 'OUT_OF_RANGE' });
     }
@@ -255,37 +255,49 @@ export function validateInventoryRecord(input: unknown): InventoryValidationResu
       });
     }
 
-    if (raw.serialNumbers !== undefined) {
-      if (!Array.isArray(raw.serialNumbers)) {
-        errors.push({
-          field: 'serialNumbers',
-          message: 'serialNumbers must be an array of strings',
-          code: 'INVALID_TYPE'
-        });
-      } else {
-        const seenSerials = new Set<string>();
-        let hasInvalidElement = false;
+    if (raw.serialNumbers === undefined || raw.serialNumbers === null) {
+      errors.push({
+        field: 'serialNumbers',
+        message: 'serialNumbers is required when trackingMode is SERIAL',
+        code: 'REQUIRED'
+      });
+    } else if (!Array.isArray(raw.serialNumbers)) {
+      errors.push({
+        field: 'serialNumbers',
+        message: 'serialNumbers must be an array of strings',
+        code: 'INVALID_TYPE'
+      });
+    } else {
+      // Invariant: serialNumbers.length === quantityOnHand
+      if (typeof raw.quantityOnHand === 'number' && Number.isInteger(raw.quantityOnHand) && raw.quantityOnHand >= 0) {
+        if (raw.serialNumbers.length !== raw.quantityOnHand) {
+          errors.push({
+            field: 'serialNumbers',
+            message: `serialNumbers count (${raw.serialNumbers.length}) must equal quantityOnHand (${raw.quantityOnHand}) for trackingMode SERIAL`,
+            code: 'INVARIANT_VIOLATION'
+          });
+        }
+      }
 
-        for (let i = 0; i < raw.serialNumbers.length; i++) {
-          const sn = raw.serialNumbers[i];
-          if (typeof sn !== 'string' || sn.trim().length === 0) {
-            hasInvalidElement = true;
+      const seenSerials = new Set<string>();
+      for (let i = 0; i < raw.serialNumbers.length; i++) {
+        const sn = raw.serialNumbers[i];
+        if (typeof sn !== 'string' || sn.trim().length === 0) {
+          errors.push({
+            field: `serialNumbers[${i}]`,
+            message: `serialNumber at index ${i} must be a non-empty string`,
+            code: 'INVALID_TYPE'
+          });
+        } else {
+          const trimmed = sn.trim();
+          if (seenSerials.has(trimmed.toUpperCase())) {
             errors.push({
               field: `serialNumbers[${i}]`,
-              message: `serialNumber at index ${i} must be a non-empty string`,
-              code: 'INVALID_TYPE'
+              message: `Duplicate serial number '${trimmed}' found in serialNumbers`,
+              code: 'INVARIANT_VIOLATION'
             });
-          } else {
-            const trimmed = sn.trim();
-            if (seenSerials.has(trimmed.toUpperCase())) {
-              errors.push({
-                field: `serialNumbers[${i}]`,
-                message: `Duplicate serial number '${trimmed}' found in serialNumbers`,
-                code: 'INVARIANT_VIOLATION'
-              });
-            }
-            seenSerials.add(trimmed.toUpperCase());
           }
+          seenSerials.add(trimmed.toUpperCase());
         }
       }
     }
@@ -299,23 +311,27 @@ export function validateInventoryRecord(input: unknown): InventoryValidationResu
       });
     }
 
-    if (raw.batchNumber !== undefined) {
-      if (typeof raw.batchNumber !== 'string') {
-        errors.push({
-          field: 'batchNumber',
-          message: 'batchNumber must be a string',
-          code: 'INVALID_TYPE'
-        });
-      } else if (raw.batchNumber.trim().length === 0) {
-        errors.push({
-          field: 'batchNumber',
-          message: 'batchNumber cannot be an empty string',
-          code: 'OUT_OF_RANGE'
-        });
-      }
+    if (raw.batchNumber === undefined || raw.batchNumber === null) {
+      errors.push({
+        field: 'batchNumber',
+        message: 'batchNumber is required when trackingMode is BATCH',
+        code: 'REQUIRED'
+      });
+    } else if (typeof raw.batchNumber !== 'string') {
+      errors.push({
+        field: 'batchNumber',
+        message: 'batchNumber must be a string',
+        code: 'INVALID_TYPE'
+      });
+    } else if (raw.batchNumber.trim().length === 0) {
+      errors.push({
+        field: 'batchNumber',
+        message: 'batchNumber cannot be an empty string',
+        code: 'OUT_OF_RANGE'
+      });
     }
 
-    if (raw.expiryDate !== undefined) {
+    if (raw.expiryDate !== undefined && raw.expiryDate !== null) {
       if (typeof raw.expiryDate !== 'string') {
         errors.push({
           field: 'expiryDate',
@@ -325,7 +341,7 @@ export function validateInventoryRecord(input: unknown): InventoryValidationResu
       } else if (raw.expiryDate.trim().length === 0 || isNaN(Date.parse(raw.expiryDate))) {
         errors.push({
           field: 'expiryDate',
-          message: 'expiryDate must be a valid ISO date string',
+          message: 'expiryDate must be a valid ISO date timestamp string',
           code: 'INVALID_TYPE'
         });
       }
@@ -376,17 +392,17 @@ export function assertValidInventoryRecord(input: unknown): asserts input is Inv
  * Enforces and verifies the 8 core Inventory Domain Invariants.
  */
 export function assertInventoryInvariants(record: InventoryRecord): void {
-  // Invariant 1: quantityOnHand >= 0
-  if (!Number.isFinite(record.quantityOnHand) || record.quantityOnHand < 0) {
-    throw new InventoryDomainError('Invariant 1 violated: quantityOnHand must be >= 0', [
-      { field: 'quantityOnHand', message: 'quantityOnHand < 0', code: 'INVARIANT_VIOLATION' }
+  // Invariant 1: quantityOnHand >= 0 and is integer
+  if (!Number.isFinite(record.quantityOnHand) || !Number.isInteger(record.quantityOnHand) || record.quantityOnHand < 0) {
+    throw new InventoryDomainError('Invariant 1 violated: quantityOnHand must be an integer >= 0', [
+      { field: 'quantityOnHand', message: 'quantityOnHand must be a non-negative integer', code: 'INVARIANT_VIOLATION' }
     ]);
   }
 
-  // Invariant 2: quantityReserved >= 0
-  if (!Number.isFinite(record.quantityReserved) || record.quantityReserved < 0) {
-    throw new InventoryDomainError('Invariant 2 violated: quantityReserved must be >= 0', [
-      { field: 'quantityReserved', message: 'quantityReserved < 0', code: 'INVARIANT_VIOLATION' }
+  // Invariant 2: quantityReserved >= 0 and is integer
+  if (!Number.isFinite(record.quantityReserved) || !Number.isInteger(record.quantityReserved) || record.quantityReserved < 0) {
+    throw new InventoryDomainError('Invariant 2 violated: quantityReserved must be an integer >= 0', [
+      { field: 'quantityReserved', message: 'quantityReserved must be a non-negative integer', code: 'INVARIANT_VIOLATION' }
     ]);
   }
 
@@ -418,6 +434,19 @@ export function assertInventoryInvariants(record: InventoryRecord): void {
     if (record.quantityOnHand !== 0 || record.quantityReserved !== 0) {
       throw new InventoryDomainError('Tracking invariant violated: Non-stocked inventory (trackingMode: NONE) must have 0 quantities', [
         { field: 'quantityOnHand', message: 'quantityOnHand must be 0 for trackingMode NONE', code: 'INVARIANT_VIOLATION' }
+      ]);
+    }
+  } else if (record.trackingMode === 'SERIAL') {
+    if (!Array.isArray(record.serialNumbers) || record.serialNumbers.length !== record.quantityOnHand) {
+      throw new InventoryDomainError(
+        `Tracking invariant violated: SERIAL inventory serialNumbers count (${record.serialNumbers ? record.serialNumbers.length : 0}) must equal quantityOnHand (${record.quantityOnHand})`,
+        [{ field: 'serialNumbers', message: 'serialNumbers.length !== quantityOnHand', code: 'INVARIANT_VIOLATION' }]
+      );
+    }
+  } else if (record.trackingMode === 'BATCH') {
+    if (!record.batchNumber || record.batchNumber.trim().length === 0) {
+      throw new InventoryDomainError('Tracking invariant violated: BATCH inventory must have a non-empty batchNumber', [
+        { field: 'batchNumber', message: 'batchNumber required for BATCH', code: 'INVARIANT_VIOLATION' }
       ]);
     }
   }

@@ -170,6 +170,14 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       }
     });
 
+    it('rejects fractional / floating-point numbers in quantityOnHand (Integer Quantity Contract)', () => {
+      for (const badValue of [2.5, 0.1, 10.999, -0.5]) {
+        const res = validateInventoryRecord({ ...validBase, quantityOnHand: badValue });
+        assert.strictEqual(res.isValid, false, `Should reject fractional quantityOnHand ${badValue}`);
+        assert.ok(res.errors.some(e => e.field === 'quantityOnHand'));
+      }
+    });
+
     it('rejects non-finite numbers (NaN, Infinity, -Infinity) in quantityReserved', () => {
       for (const badValue of [NaN, Infinity, -Infinity]) {
         const res = validateInventoryRecord({ ...validBase, quantityReserved: badValue });
@@ -178,11 +186,28 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       }
     });
 
-    it('rejects non-finite numbers and negative values in reorderPoint', () => {
+    it('rejects fractional / floating-point numbers in quantityReserved (Integer Quantity Contract)', () => {
+      for (const badValue of [1.5, 0.25, 3.14]) {
+        const res = validateInventoryRecord({ ...validBase, quantityOnHand: 10, quantityReserved: badValue });
+        assert.strictEqual(res.isValid, false, `Should reject fractional quantityReserved ${badValue}`);
+        assert.ok(res.errors.some(e => e.field === 'quantityReserved' && e.code === 'INVALID_TYPE'));
+      }
+    });
+
+    it('rejects non-finite numbers, non-integers, and negative values in reorderPoint', () => {
       assert.strictEqual(validateInventoryRecord({ ...validBase, reorderPoint: -1 }).isValid, false);
       assert.strictEqual(validateInventoryRecord({ ...validBase, reorderPoint: Infinity }).isValid, false);
       assert.strictEqual(validateInventoryRecord({ ...validBase, reorderPoint: NaN }).isValid, false);
+      assert.strictEqual(validateInventoryRecord({ ...validBase, reorderPoint: 2.5 }).isValid, false);
       assert.strictEqual(validateInventoryRecord({ ...validBase, reorderPoint: 5 }).isValid, true);
+    });
+
+    it('rejects non-finite numbers, non-integers, and negative values in reorderQuantity', () => {
+      assert.strictEqual(validateInventoryRecord({ ...validBase, reorderQuantity: -1 }).isValid, false);
+      assert.strictEqual(validateInventoryRecord({ ...validBase, reorderQuantity: Infinity }).isValid, false);
+      assert.strictEqual(validateInventoryRecord({ ...validBase, reorderQuantity: NaN }).isValid, false);
+      assert.strictEqual(validateInventoryRecord({ ...validBase, reorderQuantity: 10.5 }).isValid, false);
+      assert.strictEqual(validateInventoryRecord({ ...validBase, reorderQuantity: 20 }).isValid, true);
     });
 
     it('rejects empty or whitespace-only SKU', () => {
@@ -290,7 +315,7 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       assert.strictEqual(validateInventoryRecord(withExpiry).isValid, false);
     });
 
-    it('enforces trackingMode === SERIAL semantics (valid non-empty string serials, no batch fields, no duplicates)', () => {
+    it('enforces trackingMode === SERIAL semantics (valid non-empty string serials, exact count match, no batch fields, no duplicates)', () => {
       const validSerial = {
         ...validBase,
         trackingMode: 'SERIAL' as const,
@@ -300,16 +325,49 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       };
       assert.strictEqual(validateInventoryRecord(validSerial).isValid, true);
 
+      // Invariant: serialNumbers is required for SERIAL
+      const missingSerials = {
+        ...validBase,
+        trackingMode: 'SERIAL' as const,
+        quantityOnHand: 2,
+        quantityReserved: 0
+      };
+      const resMissing = validateInventoryRecord(missingSerials);
+      assert.strictEqual(resMissing.isValid, false);
+      assert.ok(resMissing.errors.some(e => e.field === 'serialNumbers' && e.code === 'REQUIRED'));
+
+      // Invariant: serialNumbers count must match quantityOnHand
+      const mismatchCount = {
+        ...validBase,
+        trackingMode: 'SERIAL' as const,
+        quantityOnHand: 3,
+        quantityReserved: 0,
+        serialNumbers: ['SN-01', 'SN-02'] // only 2 serials for 3 onHand
+      };
+      const resMismatch = validateInventoryRecord(mismatchCount);
+      assert.strictEqual(resMismatch.isValid, false);
+      assert.ok(resMismatch.errors.some(e => e.field === 'serialNumbers' && e.code === 'INVARIANT_VIOLATION'));
+
+      // Invariant: zero quantity on hand with empty serial array is valid
+      const zeroSerial = {
+        ...validBase,
+        trackingMode: 'SERIAL' as const,
+        quantityOnHand: 0,
+        quantityReserved: 0,
+        serialNumbers: []
+      };
+      assert.strictEqual(validateInventoryRecord(zeroSerial).isValid, true);
+
       // Rejects batch fields
       assert.strictEqual(validateInventoryRecord({ ...validSerial, batchNumber: 'B1' }).isValid, false);
       assert.strictEqual(validateInventoryRecord({ ...validSerial, expiryDate: '2026-10-15T00:00:00.000Z' }).isValid, false);
 
       // Rejects non-string serials (e.g. numbers)
-      const numberSerial = { ...validSerial, serialNumbers: [123 as unknown as string] };
+      const numberSerial = { ...validSerial, serialNumbers: [123 as unknown as string, 'SN-02'] };
       assert.strictEqual(validateInventoryRecord(numberSerial).isValid, false);
 
       // Rejects null in serials
-      const nullSerial = { ...validSerial, serialNumbers: [null as unknown as string] };
+      const nullSerial = { ...validSerial, serialNumbers: [null as unknown as string, 'SN-02'] };
       assert.strictEqual(validateInventoryRecord(nullSerial).isValid, false);
 
       // Rejects empty or whitespace serials
@@ -323,7 +381,7 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       assert.ok(resDup.errors.some(e => e.code === 'INVARIANT_VIOLATION' && e.message.includes('Duplicate serial')));
     });
 
-    it('enforces trackingMode === BATCH semantics (valid non-empty batchNumber, valid ISO expiry, no serialNumbers)', () => {
+    it('enforces trackingMode === BATCH semantics (required batchNumber, valid ISO expiry, no serialNumbers)', () => {
       const validBatch = {
         ...validBase,
         trackingMode: 'BATCH' as const,
@@ -331,6 +389,15 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
         expiryDate: '2026-11-20T00:00:00.000Z'
       };
       assert.strictEqual(validateInventoryRecord(validBatch).isValid, true);
+
+      // Invariant: batchNumber is required for BATCH tracking
+      const missingBatch = {
+        ...validBase,
+        trackingMode: 'BATCH' as const
+      };
+      const resMissing = validateInventoryRecord(missingBatch);
+      assert.strictEqual(resMissing.isValid, false);
+      assert.ok(resMissing.errors.some(e => e.field === 'batchNumber' && e.code === 'REQUIRED'));
 
       // Rejects serialNumbers
       assert.strictEqual(validateInventoryRecord({ ...validBatch, serialNumbers: ['SN-1'] }).isValid, false);
@@ -395,28 +462,32 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       assert.strictEqual(calculateAvailableQuantity(record), 0);
     });
 
-    it('Invariant 4 strictness: calculateAvailableQuantity strictly rejects non-finite, negative, and reserved > onHand', () => {
-      // 1. Valid finite values
+    it('Invariant 4 strictness: calculateAvailableQuantity strictly rejects non-finite, non-integer, negative, and reserved > onHand', () => {
+      // 1. Valid finite integer values
       assert.strictEqual(calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: 3 }), 7);
       assert.strictEqual(calculateAvailableQuantity({ quantityOnHand: 0, quantityReserved: 0 }), 0);
 
       // 2. Rejects NaN
-      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: NaN, quantityReserved: 0 }), /quantityOnHand must be a finite number/);
-      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: NaN }), /quantityReserved must be a finite number/);
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: NaN, quantityReserved: 0 }), /quantityOnHand must be a finite integer/);
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: NaN }), /quantityReserved must be a finite integer/);
 
       // 3. Rejects Infinity
-      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: Infinity, quantityReserved: 0 }), /quantityOnHand must be a finite number/);
-      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: Infinity }), /quantityReserved must be a finite number/);
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: Infinity, quantityReserved: 0 }), /quantityOnHand must be a finite integer/);
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: Infinity }), /quantityReserved must be a finite integer/);
 
-      // 4. Rejects negative quantities
+      // 4. Rejects fractional / non-integer values (Integer Quantity Contract)
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 5.5, quantityReserved: 0 }), /quantityOnHand must be a finite integer/);
+      assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: 2.25 }), /quantityReserved must be a finite integer/);
+
+      // 5. Rejects negative quantities
       assert.throws(() => calculateAvailableQuantity({ quantityOnHand: -5, quantityReserved: 0 }), /quantityOnHand cannot be negative/);
       assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 10, quantityReserved: -2 }), /quantityReserved cannot be negative/);
 
-      // 5. Rejects reserved > onHand without silently returning zero
+      // 6. Rejects reserved > onHand without silently returning zero
       assert.throws(() => calculateAvailableQuantity({ quantityOnHand: 5, quantityReserved: 8 }), /quantityReserved \(8\) cannot exceed quantityOnHand \(5\)/);
     });
 
-    it('Logical Identity: getInventoryRecordKey establishes SKU + locationId boundary', () => {
+    it('Logical Identity: getInventoryRecordKey establishes SKU + locationId boundary (and batchNumber for BATCH tracking)', () => {
       const key1 = getInventoryRecordKey({ sku: 'tshirt-blk-m', locationId: 'LOC-WAREHOUSE-A' });
       const key2 = getInventoryRecordKey({ sku: 'TSHIRT-BLK-M', locationId: 'loc-warehouse-a' });
       const keyDiffLoc = getInventoryRecordKey({ sku: 'TSHIRT-BLK-M', locationId: 'loc-store-front' });
@@ -429,6 +500,51 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       // Distinguishes location and SKU boundaries
       assert.notStrictEqual(key1, keyDiffLoc);
       assert.notStrictEqual(key1, keyDiffSku);
+
+      // BATCH Tracking Identity: includes batchNumber
+      const batchKey1 = getInventoryRecordKey({
+        sku: 'MILK-ORG-1L',
+        locationId: 'loc-cold-storage',
+        trackingMode: 'BATCH',
+        batchNumber: 'LOT-2026-A'
+      });
+      const batchKey2 = getInventoryRecordKey({
+        sku: 'milk-org-1l',
+        locationId: 'LOC-COLD-STORAGE',
+        trackingMode: 'BATCH',
+        batchNumber: 'lot-2026-a'
+      });
+      const batchKeyDiffBatch = getInventoryRecordKey({
+        sku: 'MILK-ORG-1L',
+        locationId: 'loc-cold-storage',
+        trackingMode: 'BATCH',
+        batchNumber: 'LOT-2026-B'
+      });
+
+      assert.strictEqual(batchKey1, 'MILK-ORG-1L::loc-cold-storage::LOT-2026-A');
+      assert.strictEqual(batchKey1, batchKey2, 'Batch keys must be case-insensitively equal');
+      assert.notStrictEqual(batchKey1, batchKeyDiffBatch, 'Different batches at the same location must have distinct keys');
+
+      // Create record generates distinct default IDs for distinct batches
+      const recBatch1 = createInventoryRecord({
+        sku: 'MILK-ORG-1L',
+        productId: 'prod-milk',
+        locationId: 'loc-cold-storage',
+        quantityOnHand: 20,
+        trackingMode: 'BATCH',
+        batchNumber: 'LOT-A'
+      });
+      const recBatch2 = createInventoryRecord({
+        sku: 'MILK-ORG-1L',
+        productId: 'prod-milk',
+        locationId: 'loc-cold-storage',
+        quantityOnHand: 15,
+        trackingMode: 'BATCH',
+        batchNumber: 'LOT-B'
+      });
+      assert.notStrictEqual(recBatch1.id, recBatch2.id);
+      assert.ok(recBatch1.id.includes('lot-a'));
+      assert.ok(recBatch2.id.includes('lot-b'));
     });
 
     it('Invariant 5: Inventory belongs to an authoritative SKU', () => {
@@ -761,11 +877,12 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       assert.strictEqual(parseLegacyStock(15, 'test.valid'), 15);
 
       // 2. parseLegacyStock invalid values throw InventoryDomainError
-      assert.throws(() => parseLegacyStock(NaN, 'test.nan'), /stock must be a finite number or omitted, received NaN/);
-      assert.throws(() => parseLegacyStock(Infinity, 'test.inf'), /stock must be a finite number or omitted, received Infinity/);
-      assert.throws(() => parseLegacyStock(-Infinity, 'test.-inf'), /stock must be a finite number or omitted, received -Infinity/);
+      assert.throws(() => parseLegacyStock(NaN, 'test.nan'), /stock must be a finite integer or omitted, received NaN/);
+      assert.throws(() => parseLegacyStock(Infinity, 'test.inf'), /stock must be a finite integer or omitted, received Infinity/);
+      assert.throws(() => parseLegacyStock(-Infinity, 'test.-inf'), /stock must be a finite integer or omitted, received -Infinity/);
       assert.throws(() => parseLegacyStock(-10, 'test.neg'), /stock cannot be negative, received -10/);
-      assert.throws(() => parseLegacyStock('invalid-str', 'test.str'), /stock must be a finite number or omitted, received invalid-str/);
+      assert.throws(() => parseLegacyStock('invalid-str', 'test.str'), /stock must be a finite integer or omitted, received invalid-str/);
+      assert.throws(() => parseLegacyStock(5.5, 'test.frac'), /stock must be a finite integer or omitted, received 5.5/);
 
       // 3. createInventoryRecordsFromLegacyProduct with missing stock succeeds with 0
       const missingStockProd = {
@@ -791,9 +908,16 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
         ...missingStockProd,
         stock: NaN
       } as unknown as Product;
-      assert.throws(() => createInventoryRecordsFromLegacyProduct(nanStockProd), /stock must be a finite number or omitted, received NaN/);
+      assert.throws(() => createInventoryRecordsFromLegacyProduct(nanStockProd), /stock must be a finite integer or omitted, received NaN/);
 
-      // 5. createInventoryRecordsFromLegacyProduct with negative variant stock throws explicit error
+      // 5. createInventoryRecordsFromLegacyProduct with fractional stock throws explicit error
+      const fracStockProd = {
+        ...missingStockProd,
+        stock: 12.5
+      } as unknown as Product;
+      assert.throws(() => createInventoryRecordsFromLegacyProduct(fracStockProd), /stock must be a finite integer or omitted, received 12.5/);
+
+      // 6. createInventoryRecordsFromLegacyProduct with negative variant stock throws explicit error
       const negativeVariantProd = {
         ...missingStockProd,
         variants: [{ sku: 'VAR-1', stock: -5 }]
@@ -902,4 +1026,279 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
       assert.strictEqual(rec42.quantityOnHand, 15);
     });
   });
+
+  // ==========================================================================
+  // 6. INV-001-F1.1 — Quantity, Serial, Batch & Identity Hardening
+  // ==========================================================================
+  describe('6. INV-001-F1.1 Final Hardening Pass: Quantity, Serial, Batch & Identity Contracts', () => {
+    const validBaseRecord = {
+      id: 'inv-harden-base',
+      sku: 'SKU-HARDEN-01',
+      productId: 'prod-harden-1',
+      locationId: 'loc-main-store',
+      quantityOnHand: 10,
+      quantityReserved: 2,
+      trackingMode: 'QUANTITY' as const,
+      status: 'ACTIVE' as const,
+      createdAt: '2026-09-08T00:00:00.000Z',
+      updatedAt: '2026-09-08T00:00:00.000Z'
+    };
+
+    // ------------------------------------------------------------------------
+    // A. Quantity Contract (Option A - Integer Inventory)
+    // ------------------------------------------------------------------------
+    describe('A. Authoritative Quantity Contract (Option A: Discrete Integer)', () => {
+      it('accepts valid non-negative integer quantities (0, 1, 10)', () => {
+        for (const validQty of [0, 1, 10]) {
+          const res = validateInventoryRecord({
+            ...validBaseRecord,
+            quantityOnHand: validQty,
+            quantityReserved: 0
+          });
+          assert.strictEqual(res.isValid, true, `Should accept integer quantityOnHand ${validQty}`);
+          assert.strictEqual(res.record?.quantityOnHand, validQty);
+        }
+      });
+
+      it('rejects fractional quantityOnHand (e.g. 1.5)', () => {
+        const res = validateInventoryRecord({
+          ...validBaseRecord,
+          quantityOnHand: 1.5,
+          quantityReserved: 0
+        });
+        assert.strictEqual(res.isValid, false, 'Fractional quantityOnHand 1.5 must be rejected');
+        assert.ok(res.errors.some(e => e.field === 'quantityOnHand' && e.code === 'INVALID_TYPE'));
+      });
+
+      it('rejects NaN quantityOnHand', () => {
+        const res = validateInventoryRecord({
+          ...validBaseRecord,
+          quantityOnHand: NaN,
+          quantityReserved: 0
+        });
+        assert.strictEqual(res.isValid, false, 'NaN quantityOnHand must be rejected');
+        assert.ok(res.errors.some(e => e.field === 'quantityOnHand' && e.code === 'INVALID_TYPE'));
+      });
+
+      it('rejects Infinity quantityOnHand', () => {
+        const res = validateInventoryRecord({
+          ...validBaseRecord,
+          quantityOnHand: Infinity,
+          quantityReserved: 0
+        });
+        assert.strictEqual(res.isValid, false, 'Infinity quantityOnHand must be rejected');
+        assert.ok(res.errors.some(e => e.field === 'quantityOnHand' && e.code === 'INVALID_TYPE'));
+      });
+
+      it('strictly enforces integer contract on reorderPoint and reorderQuantity', () => {
+        // Valid integers
+        assert.strictEqual(validateInventoryRecord({ ...validBaseRecord, reorderPoint: 0, reorderQuantity: 10 }).isValid, true);
+        assert.strictEqual(validateInventoryRecord({ ...validBaseRecord, reorderPoint: 5, reorderQuantity: 25 }).isValid, true);
+
+        // Fractional reorder values rejected
+        assert.strictEqual(validateInventoryRecord({ ...validBaseRecord, reorderPoint: 2.5 }).isValid, false);
+        assert.strictEqual(validateInventoryRecord({ ...validBaseRecord, reorderQuantity: 10.25 }).isValid, false);
+
+        // NaN / Infinity rejected
+        assert.strictEqual(validateInventoryRecord({ ...validBaseRecord, reorderPoint: NaN }).isValid, false);
+        assert.strictEqual(validateInventoryRecord({ ...validBaseRecord, reorderQuantity: Infinity }).isValid, false);
+      });
+    });
+
+    // ------------------------------------------------------------------------
+    // B. SERIAL Tracking Invariants
+    // ------------------------------------------------------------------------
+    describe('B. SERIAL Tracking Invariants', () => {
+      const validSerialBase = {
+        ...validBaseRecord,
+        trackingMode: 'SERIAL' as const
+      };
+
+      it('accepts matching quantity and serial count: quantityOnHand = 3, serialNumbers = ["A", "B", "C"]', () => {
+        const res = validateInventoryRecord({
+          ...validSerialBase,
+          quantityOnHand: 3,
+          quantityReserved: 0,
+          serialNumbers: ['SN-ALPHA', 'SN-BRAVO', 'SN-CHARLIE']
+        });
+        assert.strictEqual(res.isValid, true);
+        assert.strictEqual(res.record?.serialNumbers?.length, 3);
+      });
+
+      it('rejects mismatched count: quantityOnHand = 3, serialNumbers = ["A", "B"]', () => {
+        const res = validateInventoryRecord({
+          ...validSerialBase,
+          quantityOnHand: 3,
+          quantityReserved: 0,
+          serialNumbers: ['SN-ALPHA', 'SN-BRAVO']
+        });
+        assert.strictEqual(res.isValid, false);
+        assert.ok(res.errors.some(e => e.field === 'serialNumbers' && e.code === 'INVARIANT_VIOLATION' && e.message.includes('must equal quantityOnHand')));
+      });
+
+      it('rejects duplicate serial numbers: quantityOnHand = 3, serialNumbers = ["A", "A", "B"]', () => {
+        const res = validateInventoryRecord({
+          ...validSerialBase,
+          quantityOnHand: 3,
+          quantityReserved: 0,
+          serialNumbers: ['SN-ALPHA', 'SN-ALPHA', 'SN-BRAVO']
+        });
+        assert.strictEqual(res.isValid, false);
+        assert.ok(res.errors.some(e => e.code === 'INVARIANT_VIOLATION' && e.message.includes('Duplicate serial')));
+      });
+
+      it('rejects empty or whitespace serial strings in serialNumbers array', () => {
+        const res = validateInventoryRecord({
+          ...validSerialBase,
+          quantityOnHand: 2,
+          quantityReserved: 0,
+          serialNumbers: ['SN-ALPHA', '   ']
+        });
+        assert.strictEqual(res.isValid, false);
+        assert.ok(res.errors.some(e => e.field === 'serialNumbers[1]'));
+      });
+
+      it('accepts zero serial inventory: quantityOnHand = 0, serialNumbers = []', () => {
+        const res = validateInventoryRecord({
+          ...validSerialBase,
+          quantityOnHand: 0,
+          quantityReserved: 0,
+          serialNumbers: []
+        });
+        assert.strictEqual(res.isValid, true);
+        assert.strictEqual(res.record?.quantityOnHand, 0);
+        assert.deepStrictEqual(res.record?.serialNumbers, []);
+      });
+
+      it('rejects invalid serial array (null, undefined when onHand > 0, or non-array)', () => {
+        // Missing when onHand = 3
+        const resMissing = validateInventoryRecord({
+          ...validSerialBase,
+          quantityOnHand: 3,
+          quantityReserved: 0
+        });
+        assert.strictEqual(resMissing.isValid, false);
+        assert.ok(resMissing.errors.some(e => e.field === 'serialNumbers' && e.code === 'REQUIRED'));
+
+        // Non-array
+        const resNonArray = validateInventoryRecord({
+          ...validSerialBase,
+          quantityOnHand: 1,
+          quantityReserved: 0,
+          serialNumbers: 'SN-NOT-ARRAY' as unknown as string[]
+        });
+        assert.strictEqual(resNonArray.isValid, false);
+        assert.ok(resNonArray.errors.some(e => e.field === 'serialNumbers' && e.code === 'INVALID_TYPE'));
+      });
+    });
+
+    // ------------------------------------------------------------------------
+    // C. BATCH Tracking Architecture
+    // ------------------------------------------------------------------------
+    describe('C. BATCH Tracking Architecture', () => {
+      const validBatchBase = {
+        ...validBaseRecord,
+        trackingMode: 'BATCH' as const
+      };
+
+      it('accepts valid batch: non-empty batchNumber + valid ISO expiry date', () => {
+        const res = validateInventoryRecord({
+          ...validBatchBase,
+          quantityOnHand: 50,
+          quantityReserved: 5,
+          batchNumber: 'LOT-2026-09-XYZ',
+          expiryDate: '2027-03-31T00:00:00.000Z'
+        });
+        assert.strictEqual(res.isValid, true);
+        assert.strictEqual(res.record?.batchNumber, 'LOT-2026-09-XYZ');
+        assert.strictEqual(res.record?.expiryDate, '2027-03-31T00:00:00.000Z');
+      });
+
+      it('rejects empty or whitespace batchNumber', () => {
+        // Missing batchNumber
+        assert.strictEqual(validateInventoryRecord({ ...validBatchBase, batchNumber: undefined }).isValid, false);
+        // Empty string
+        assert.strictEqual(validateInventoryRecord({ ...validBatchBase, batchNumber: '' }).isValid, false);
+        // Whitespace string
+        assert.strictEqual(validateInventoryRecord({ ...validBatchBase, batchNumber: '   ' }).isValid, false);
+      });
+
+      it('rejects invalid or malformed expiryDate', () => {
+        const resInvalidDate = validateInventoryRecord({
+          ...validBatchBase,
+          batchNumber: 'LOT-001',
+          expiryDate: 'invalid-non-iso-date'
+        });
+        assert.strictEqual(resInvalidDate.isValid, false);
+        assert.ok(resInvalidDate.errors.some(e => e.field === 'expiryDate'));
+      });
+
+      it('supports multiple batches for the same SKU and location coexisting', () => {
+        const batch1 = createInventoryRecord({
+          sku: 'SKU-A',
+          productId: 'prod-a',
+          locationId: 'STORE-1',
+          quantityOnHand: 20,
+          trackingMode: 'BATCH',
+          batchNumber: 'BATCH-001'
+        });
+
+        const batch2 = createInventoryRecord({
+          sku: 'SKU-A',
+          productId: 'prod-a',
+          locationId: 'STORE-1',
+          quantityOnHand: 35,
+          trackingMode: 'BATCH',
+          batchNumber: 'BATCH-002'
+        });
+
+        // Records must have distinct IDs and be independently valid
+        assert.notStrictEqual(batch1.id, batch2.id);
+        assert.ok(batch1.id.includes('batch_001') || batch1.id.includes('batch-001'));
+        assert.ok(batch2.id.includes('batch_002') || batch2.id.includes('batch-002'));
+
+        // Batch identity keys must differ
+        const key1 = getInventoryRecordKey(batch1);
+        const key2 = getInventoryRecordKey(batch2);
+        assert.notStrictEqual(key1, key2);
+        assert.strictEqual(key1, 'SKU-A::store-1::BATCH-001');
+        assert.strictEqual(key2, 'SKU-A::store-1::BATCH-002');
+      });
+    });
+
+    // ------------------------------------------------------------------------
+    // D. Identity Collision & Boundary Verification
+    // ------------------------------------------------------------------------
+    describe('D. Identity Collision & Boundary Verification', () => {
+      it('verifies SKU-A + LOCATION-1 does not collide with SKU-A + LOCATION-2', () => {
+        const keyLoc1 = getInventoryRecordKey({ sku: 'SKU-A', locationId: 'LOCATION-1', trackingMode: 'QUANTITY' });
+        const keyLoc2 = getInventoryRecordKey({ sku: 'SKU-A', locationId: 'LOCATION-2', trackingMode: 'QUANTITY' });
+
+        assert.strictEqual(keyLoc1, 'SKU-A::location-1');
+        assert.strictEqual(keyLoc2, 'SKU-A::location-2');
+        assert.notStrictEqual(keyLoc1, keyLoc2, 'Records at different locations must not collide');
+      });
+
+      it('verifies SKU-A + LOCATION-1 + BATCH-001 does not collide with SKU-A + LOCATION-1 + BATCH-002', () => {
+        const keyBatch1 = getInventoryRecordKey({
+          sku: 'SKU-A',
+          locationId: 'LOCATION-1',
+          trackingMode: 'BATCH',
+          batchNumber: 'BATCH-001'
+        });
+
+        const keyBatch2 = getInventoryRecordKey({
+          sku: 'SKU-A',
+          locationId: 'LOCATION-1',
+          trackingMode: 'BATCH',
+          batchNumber: 'BATCH-002'
+        });
+
+        assert.strictEqual(keyBatch1, 'SKU-A::location-1::BATCH-001');
+        assert.strictEqual(keyBatch2, 'SKU-A::location-1::BATCH-002');
+        assert.notStrictEqual(keyBatch1, keyBatch2, 'Distinct batches of the same SKU at the same location must not collide');
+      });
+    });
+  });
 });
+

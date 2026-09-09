@@ -225,6 +225,45 @@ This register records foundational architectural decisions for `greatjoy026/pos-
   - Public catalog storefront projections are guaranteed to follow a uniform, mandatory availability schema.
   - All regression tests (115/115) pass cleanly with zero lint or build errors.
 
+---
+
+### ADR-017: Authoritative Inventory Quantity & Tracking Contract Finalization (INV-001-F1.1)
+
+* **Status**: `IMPLEMENTED (INV-001-F1.1)`
+* **Context**: Technical supervisor review of `INV-001-F1` identified two architectural questions requiring final contract hardening:
+  1. Alignment between TypeScript domain quantity semantics and Firestore quantity semantics (Option A: Integer vs Option B: Fractional).
+  2. Explicit specification and validation of `SERIAL` and `BATCH` tracking mode invariants and logical identity rules.
+* **Decision**:
+  1. **Authoritative Quantity Contract (Option A: Discrete Integer Inventory)**:
+     - Following deep architectural inspection of the repository, the existing system is architected around discrete countable units with packaging conversions (`PackagingUOMBuilder`, multipliers).
+     - Both TypeScript domain layer (`src/domain/inventory/validation.ts`) and Firestore security rules (`firestore.rules`) enforce non-negative integers (`Number.isInteger(qty) && qty >= 0` and `data.quantityOnHand is int && data.quantityOnHand >= 0`).
+     - Fractional quantities (e.g. 1.5), NaN, and Infinity are strictly rejected at all system boundaries.
+     - Quantity inputs in the UI (`StepInventory.tsx`, `Step3Inventory.tsx`, `PackagingUOMBuilder.tsx`, `Step2Variants.tsx`) enforce `step="1"` and `parseInt(..., 10)`.
+     - Future fractional UOM capabilities (e.g., weighable goods) must be introduced as an explicit architectural phase through fixed-point integer scaling (e.g., milligram/gram base units) or a deliberate fractional migration.
+  2. **Invariants Governing SERIAL Inventory**:
+     - `trackingMode === 'SERIAL'` requires:
+       * `quantityOnHand == serialNumbers.length` (exact match).
+       * Every serial number must be a non-empty string.
+       * No duplicate serial numbers in the array.
+       * Zero inventory (`quantityOnHand == 0`) requires an empty array (`serialNumbers: []`).
+       * Batch fields (`batchNumber`, `expiryDate`) are strictly forbidden.
+  3. **Invariants Governing BATCH Inventory**:
+     - `trackingMode === 'BATCH'` requires:
+       * `batchNumber` is mandatory and must be a non-empty string.
+       * `expiryDate` when provided must be a valid ISO 8601 string.
+       * `serialNumbers` is strictly forbidden.
+       * Multiple batches for the same SKU and location are first-class citizens and coexist concurrently.
+  4. **Logical Identity Rule for Inventory Records**:
+     - Canonical key generation is formalized in `getInventoryRecordKey()`:
+       * For `QUANTITY` and `NONE`: `SKU::LOCATION` (e.g., `SKU-100::loc-warehouse`).
+       * For `BATCH`: `SKU::LOCATION::BATCH` (e.g., `SKU-100::loc-warehouse::LOT-2026-A`).
+       * Distinct locations (e.g., `SKU-A::LOCATION-1` vs `SKU-A::LOCATION-2`) and distinct batches (e.g., `SKU-A::LOC-1::BATCH-1` vs `SKU-A::LOC-1::BATCH-2`) never collide.
+* **Consequences**:
+  - The domain contract is 100% consistent across TypeScript validation, Firestore rules, UI input controls, and test suites.
+  - Zero tolerance for corrupted serial or batch inventory states.
+  - Ready for subsequent inventory movement and ledgering phases without architectural debt.
+
+
 
 
 

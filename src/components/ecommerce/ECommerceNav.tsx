@@ -50,7 +50,7 @@ export default function ECommerceNav({
       
       {/* 1. Top Announcement / Sliding Flash Promo Bar */}
       <div className="bg-slate-900 text-white text-[11px] font-medium py-1.5 px-4 overflow-hidden" id="ecom-top-announcement">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+        <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-12 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-slate-300">
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 font-bold text-[10px] tracking-wide uppercase">
               <Zap className="w-3 h-3 text-amber-400" /> Flash Promo
@@ -78,7 +78,7 @@ export default function ECommerceNav({
       </div>
 
       {/* 2. Main Navigation Bar */}
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+      <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-12">
         <div className="flex items-center justify-between h-16 sm:h-20 gap-2 sm:gap-4">
           
           {/* Logo & Brand Identity */}
@@ -104,7 +104,7 @@ export default function ECommerceNav({
           </div>
 
           {/* Center: Search Bar (Desktop & Tablet) */}
-          <div className="hidden md:flex flex-1 max-w-md lg:max-w-lg relative mx-2" id="ecom-nav-search-desktop">
+          <div className="hidden md:flex flex-1 max-w-md lg:max-w-xl xl:max-w-2xl relative mx-4" id="ecom-nav-search-desktop">
             <div className="relative w-full">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
               <input
@@ -145,12 +145,13 @@ export default function ECommerceNav({
               <button
                 type="button"
                 onClick={onSwitchToAdmin}
-                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0"
                 title="Return to POS & Business Administration"
                 id="ecom-btn-admin-console"
               >
-                <Terminal className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Admin Console</span>
+                <Terminal className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span className="hidden xs:inline">Admin Console</span>
+                <span className="xs:hidden">Admin</span>
               </button>
             )}
 

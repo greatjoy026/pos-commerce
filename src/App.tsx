@@ -718,14 +718,14 @@ export default function App() {
   return (
     <div className="bg-slate-50 min-h-screen text-slate-800 flex flex-col justify-between" id="applet-viewport-root">
       
-      {/* Top Main Mode Selector - Core Showroom navigation */}
-      <header className="bg-slate-900 border-b border-white/10 px-3 sm:px-6 py-2.5 sticky top-0 z-40 shadow-md backdrop-blur-md" id="master-mode-navbar">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
-          
-          {/* Left Brand & Mobile Navigation Trigger */}
-          <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
-            {/* Mobile/Tablet Sidebar Hamburger Toggle (visible on mobile/tablet when in Admin mode) */}
-            {currentView === 'Admin' && (
+      {/* Top Main Mode Selector - Core Showroom navigation (Only shown in Admin mode) */}
+      {currentView === 'Admin' && (
+        <header className="bg-slate-900 border-b border-white/10 px-3 sm:px-6 py-2.5 sticky top-0 z-40 shadow-md backdrop-blur-md" id="master-mode-navbar">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            
+            {/* Left Brand & Mobile Navigation Trigger */}
+            <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
+              {/* Mobile/Tablet Sidebar Hamburger Toggle (visible on mobile/tablet when in Admin mode) */}
               <button
                 onClick={() => setIsMobileSidebarOpen(true)}
                 className="lg:hidden p-2 text-gray-300 hover:text-white rounded-xl hover:bg-slate-800 active:scale-95 transition-all border border-slate-700/80 shrink-0 cursor-pointer"
@@ -735,66 +735,66 @@ export default function App() {
               >
                 <Menu className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
-            )}
-            
-            <div className="w-8 h-8 sm:w-9 sm:h-9 bg-gradient-to-br from-indigo-500 via-indigo-600 to-indigo-700 rounded-xl text-white font-black text-xs sm:text-sm flex items-center justify-center shadow-md shadow-indigo-900/50 shrink-0 select-none">
-              N
+              
+              <div className="w-8 h-8 sm:w-9 sm:h-9 bg-gradient-to-br from-indigo-500 via-indigo-600 to-indigo-700 rounded-xl text-white font-black text-xs sm:text-sm flex items-center justify-center shadow-md shadow-indigo-900/50 shrink-0 select-none">
+                N
+              </div>
+
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h1 className="text-xs sm:text-sm font-black tracking-wider text-white uppercase truncate">
+                    NEXUS POS-COMMERCE CORE
+                  </h1>
+                  <span className="hidden md:inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    {adminSubTab}
+                  </span>
+                </div>
+                <p className="text-[10px] text-gray-400 truncate hidden xs:block">
+                  Enterprise Unified Multi-Channel System
+                </p>
+              </div>
             </div>
 
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="text-xs sm:text-sm font-black tracking-wider text-white uppercase truncate">
-                  NEXUS POS-COMMERCE CORE
-                </h1>
-                <span className="hidden md:inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                  {currentView === 'Admin' ? adminSubTab : 'Online Store'}
+            {/* Right Status & Active Operator Bar */}
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0" id="master-header-telemetry">
+              
+              {/* Real-time Cloud/Firestore Status Indicator */}
+              <div 
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/5 border border-white/10 text-[11px] font-mono text-gray-300"
+                title={deviceOffline ? 'Operating in local offline buffer mode' : 'Connected to Firestore Cloud DB'}
+              >
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    deviceOffline ? 'bg-amber-400' : dbStatus === 'connected' ? 'bg-emerald-400' : 'bg-indigo-400'
+                  }`} />
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${
+                    deviceOffline ? 'bg-amber-500' : dbStatus === 'connected' ? 'bg-emerald-500' : 'bg-indigo-500'
+                  }`} />
+                </span>
+                <span className="hidden sm:inline font-semibold">
+                  {deviceOffline ? 'Offline Cache' : dbStatus === 'connected' ? 'Cloud Active' : 'Syncing...'}
                 </span>
               </div>
-              <p className="text-[10px] text-gray-400 truncate hidden xs:block">
-                Enterprise Unified Multi-Channel System
-              </p>
-            </div>
-          </div>
 
-          {/* Right Status & Active Operator Bar */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0" id="master-header-telemetry">
-            
-            {/* Real-time Cloud/Firestore Status Indicator */}
-            <div 
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/5 border border-white/10 text-[11px] font-mono text-gray-300"
-              title={deviceOffline ? 'Operating in local offline buffer mode' : 'Connected to Firestore Cloud DB'}
-            >
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                  deviceOffline ? 'bg-amber-400' : dbStatus === 'connected' ? 'bg-emerald-400' : 'bg-indigo-400'
-                }`} />
-                <span className={`relative inline-flex rounded-full h-2 w-2 ${
-                  deviceOffline ? 'bg-amber-500' : dbStatus === 'connected' ? 'bg-emerald-500' : 'bg-indigo-500'
-                }`} />
-              </span>
-              <span className="hidden sm:inline font-semibold">
-                {deviceOffline ? 'Offline Cache' : dbStatus === 'connected' ? 'Cloud Active' : 'Syncing...'}
-              </span>
-            </div>
-
-            {/* Active Staff Member Profile Badge */}
-            <div className="flex items-center gap-2 pl-2 border-l border-white/10">
-              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 font-bold text-xs flex items-center justify-center shrink-0">
-                {activeStaff.name.charAt(0)}
-              </div>
-              <div className="hidden sm:block text-left">
-                <div className="text-xs font-bold text-white truncate max-w-[120px] leading-tight">
-                  {activeStaff.name}
+              {/* Active Staff Member Profile Badge */}
+              <div className="flex items-center gap-2 pl-2 border-l border-white/10">
+                <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-indigo-600/30 border border-indigo-500/40 text-indigo-200 font-bold text-xs flex items-center justify-center shrink-0">
+                  {activeStaff.name.charAt(0)}
                 </div>
-                <div className="text-[9px] font-mono text-indigo-300 uppercase tracking-wider">
-                  {activeStaff.role}
+                <div className="hidden sm:block text-left">
+                  <div className="text-xs font-bold text-white truncate max-w-[120px] leading-tight">
+                    {activeStaff.name}
+                  </div>
+                  <div className="text-[9px] font-mono text-indigo-300 uppercase tracking-wider">
+                    {activeStaff.role}
+                  </div>
                 </div>
               </div>
-            </div>
 
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       {/* Main viewport area */}
       <div className="flex-1" id="main-content-stage">

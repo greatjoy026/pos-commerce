@@ -713,8 +713,9 @@ export default function Step2Variants({
                 <input
                   type="number"
                   min="0"
+                  step="1"
                   value={singleStock}
-                  onChange={(e) => setSingleStock(Math.max(0, Number(e.target.value)))}
+                  onChange={(e) => setSingleStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
                   className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono font-bold"
                 />
               </div>
@@ -764,8 +765,9 @@ export default function Step2Variants({
                     <input
                       type="number"
                       min="0"
+                      step="1"
                       value={bulkStockValue}
-                      onChange={(e) => setBulkStockValue(Number(e.target.value))}
+                      onChange={(e) => setBulkStockValue(Math.max(0, parseInt(e.target.value, 10) || 0))}
                       className="w-16 px-2 py-1 bg-white border border-indigo-200 rounded text-xs font-mono font-bold text-center"
                     />
                     <button
@@ -826,8 +828,9 @@ export default function Step2Variants({
                             <input
                               type="number"
                               min="0"
+                              step="1"
                               value={v.stock}
-                              onChange={(e) => updateVariantRow(idx, 'stock', Math.max(0, Number(e.target.value)))}
+                              onChange={(e) => updateVariantRow(idx, 'stock', Math.max(0, parseInt(e.target.value, 10) || 0))}
                               className="w-16 px-2 py-1 bg-slate-50 border border-slate-200 rounded text-xs font-mono font-bold text-right"
                             />
                           </td>

@@ -309,3 +309,46 @@ To maintain clean separation between product types and inventory behavior, capab
 * All collections (`products`, `customers`, `staff`, `orders`, `settings`) allow public reads and writes as long as `isValidId` is true.
 * **Critical Finding**: `isValidId` performs structural string length validation on the document ID, not user authorization. Anyone with the Firestore database URL can read and modify all customer PII, staff records, orders, and products.
 * **Required Action**: Documented as **P0 Security Risk (RISK-001)** to be addressed in task `SEC-001`.
+
+---
+
+## 10. Inventory Domain Architecture & Authoritative Contracts (INV-001 / INV-001-F1.1)
+
+### 10.1 Authoritative Quantity Contract (Option A: Discrete Integer Units)
+* **Contract Specification**: All operational inventory quantities (`quantityOnHand`, `quantityReserved`, `reorderPoint`, `reorderQuantity`) are strictly non-negative discrete integers (`Number.isInteger(qty) && qty >= 0`).
+* **Boundary Alignment**:
+  * **TypeScript Domain Layer**: `src/domain/inventory/validation.ts` rejects non-integers, fractional values (e.g. 1.5), `NaN`, and `Infinity` with `INVALID_TYPE` validation errors.
+  * **Firestore Persistence Rules**: `firestore.rules` enforces `data.quantityOnHand is int && data.quantityOnHand >= 0` and `data.quantityReserved is int && data.quantityReserved >= 0`.
+  * **Schema Blueprint**: `firebase-blueprint.json` explicitly assigns `{ "type": "integer" }` to all inventory quantity attributes.
+  * **User Interface Controls**: All stock and reorder input fields (`StepInventory.tsx`, `Step3Inventory.tsx`, `PackagingUOMBuilder.tsx`, `Step2Variants.tsx`) enforce `step="1"` and `parseInt(e.target.value, 10)`.
+* **Rationale**: The catalog architecture handles fractional physical realities via discrete base units with explicit packaging multipliers (`PackagingUOMBuilder`, e.g. 1 box = 30 pieces). Any future continuous measurement (e.g., weighable bulk goods) must be introduced through fixed-point integer scaling (e.g., milligram or gram integers) or a formal fractional migration.
+
+### 10.2 Tracking Mode Invariants
+
+#### 10.2.1 SERIAL Tracking Mode
+* **Scope**: High-value, individually serialized items (e.g. electronic devices, serialized assets).
+* **Invariants**:
+  1. `quantityOnHand == serialNumbers.length`: Exact one-to-one correspondence between on-hand quantity and registered serial numbers.
+  2. Every serial number in `serialNumbers` must be a non-empty string.
+  3. All serial numbers in `serialNumbers` must be unique (no duplicates within the record).
+  4. Zero inventory (`quantityOnHand == 0`) requires an empty array (`serialNumbers: []`).
+  5. Batch fields (`batchNumber`, `expiryDate`) are strictly forbidden when `trackingMode == 'SERIAL'`.
+
+#### 10.2.2 BATCH Tracking Mode
+* **Scope**: Perishable, lot-based, or pharmaceutical goods requiring lot traceability.
+* **Invariants**:
+  1. `batchNumber` is mandatory, non-empty, and constrained in size.
+  2. `expiryDate` when provided must be a valid ISO 8601 string.
+  3. `serialNumbers` is strictly forbidden when `trackingMode == 'BATCH'`.
+  4. Multiple batches of the same SKU and location are first-class citizens and coexist concurrently as distinct inventory records.
+
+#### 10.2.3 QUANTITY and NONE Modes
+* **QUANTITY**: Standard tracked stock without serial or batch metadata (`serialNumbers`, `batchNumber`, and `expiryDate` are forbidden).
+* **NONE**: Untracked virtual items or non-inventory services (`quantityOnHand == 0`, `quantityReserved == 0`, no serial/batch fields).
+
+### 10.3 Logical Identity Rules
+* Canonical inventory document identity is derived via `getInventoryRecordKey()`:
+  * **Standard / Quantity / None**: `SKU::LOCATION` (e.g., `SKU-100::loc-warehouse`).
+  * **Batch-Tracked Items**: `SKU::LOCATION::BATCH` (e.g., `SKU-100::loc-warehouse::LOT-2026-A`).
+* Distinct locations for the same SKU (`SKU-A::LOC-1` vs `SKU-A::LOC-2`) and distinct batches for the same SKU at the same location (`SKU-A::LOC-1::BATCH-1` vs `SKU-A::LOC-1::BATCH-2`) generate non-colliding keys and independent Firestore records.
+

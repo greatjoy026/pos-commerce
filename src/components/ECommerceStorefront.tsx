@@ -323,7 +323,7 @@ export default function ECommerceStorefront({
       />
 
       {/* 2. Main Page Body */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-12">
+      <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 xl:px-12 py-6 space-y-12">
         
         {/* HOMEPAGE VIEW */}
         {activeTab === 'home' && !searchTerm && (
@@ -374,8 +374,8 @@ export default function ECommerceStorefront({
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-                {products.slice(0, 4).map(prod => (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-5">
+                {products.slice(0, 6).map(prod => (
                   <ECommerceProductCard
                     key={prod.id}
                     product={prod}
@@ -427,8 +427,8 @@ export default function ECommerceStorefront({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-                  {bestSellers.slice(0, 4).map(prod => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-5">
+                  {bestSellers.slice(0, 6).map(prod => (
                     <ECommerceProductCard
                       key={prod.id}
                       product={prod}
@@ -480,8 +480,8 @@ export default function ECommerceStorefront({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-                  {newArrivals.slice(0, 4).map(prod => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-5">
+                  {newArrivals.slice(0, 6).map(prod => (
                     <ECommerceProductCard
                       key={prod.id}
                       product={prod}
@@ -591,7 +591,7 @@ export default function ECommerceStorefront({
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-5">
                 {filteredProducts.map(prod => (
                   <ECommerceProductCard
                     key={prod.id}
@@ -616,7 +616,7 @@ export default function ECommerceStorefront({
 
       {/* 3. Global Footer */}
       <footer className="bg-slate-900 text-slate-300 border-t border-slate-800 mt-16 pt-12 pb-8" id="ecom-footer">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+        <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-12 space-y-10">
           
           {/* Top Value Assurance Grid */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 pb-8 border-b border-slate-800">

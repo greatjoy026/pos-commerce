@@ -51,9 +51,9 @@ export function parseLegacyStock(stock: unknown, context: string): number {
     // Documented migration policy: missing legacy stock defaults to 0
     return 0;
   }
-  if (typeof stock !== 'number' || !Number.isFinite(stock)) {
+  if (typeof stock !== 'number' || !Number.isFinite(stock) || !Number.isInteger(stock)) {
     throw new InventoryDomainError(
-      `Legacy migration failed for ${context}: stock must be a finite number or omitted, received ${String(stock)}`,
+      `Legacy migration failed for ${context}: stock must be a finite integer or omitted, received ${String(stock)}`,
       [{ field: `${context}.stock`, message: `Invalid legacy stock value: ${String(stock)}`, code: 'INVALID_TYPE' }]
     );
   }
@@ -75,9 +75,21 @@ export function createInventoryRecord(params: CreateInventoryParams): InventoryR
     ? params.locationId.trim()
     : DEFAULT_LOCATION_ID;
 
+  const trackingMode = params.trackingMode ?? 'QUANTITY';
+  const cleanSku = params.sku ? params.sku.toLowerCase().replace(/[^a-z0-9_-]/g, '_') : 'sku';
+  const cleanBatch = params.batchNumber ? params.batchNumber.toLowerCase().replace(/[^a-z0-9_-]/g, '_') : '';
+  const defaultId = (trackingMode === 'BATCH' && cleanBatch)
+    ? `inv-${cleanSku}-${locationId}-${cleanBatch}`
+    : `inv-${cleanSku}-${locationId}`;
+
   const id = params.id && params.id.trim().length > 0
     ? params.id.trim()
-    : `inv-${params.sku.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}-${locationId}`;
+    : defaultId;
+
+  // For SERIAL tracking: if on-hand is 0 and serialNumbers is omitted, default to empty array
+  const serialNumbers = trackingMode === 'SERIAL'
+    ? (params.serialNumbers ?? (params.quantityOnHand === 0 ? [] : undefined))
+    : undefined;
 
   const record: InventoryRecord = {
     id,
@@ -89,11 +101,11 @@ export function createInventoryRecord(params: CreateInventoryParams): InventoryR
     quantityReserved: params.quantityReserved ?? 0,
     reorderPoint: params.reorderPoint,
     reorderQuantity: params.reorderQuantity,
-    trackingMode: params.trackingMode ?? 'QUANTITY',
+    trackingMode,
     status: params.status ?? 'ACTIVE',
-    serialNumbers: params.serialNumbers,
-    batchNumber: params.batchNumber,
-    expiryDate: params.expiryDate,
+    serialNumbers,
+    batchNumber: trackingMode === 'BATCH' ? params.batchNumber : undefined,
+    expiryDate: trackingMode === 'BATCH' ? params.expiryDate : undefined,
     createdAt: now,
     updatedAt: now
   };
@@ -157,7 +169,7 @@ export function createInventoryRecordsFromLegacyProduct(
           locationId: location,
           quantityOnHand: vStock,
           quantityReserved: 0,
-          reorderPoint: typeof product.reorderPoint === 'number' && product.reorderPoint >= 0 ? product.reorderPoint : undefined,
+          reorderPoint: typeof product.reorderPoint === 'number' && Number.isInteger(product.reorderPoint) && product.reorderPoint >= 0 ? product.reorderPoint : undefined,
           trackingMode,
           status: 'ACTIVE'
         }));
@@ -176,7 +188,7 @@ export function createInventoryRecordsFromLegacyProduct(
       locationId: location,
       quantityOnHand: baseStock,
       quantityReserved: 0,
-      reorderPoint: typeof product.reorderPoint === 'number' && product.reorderPoint >= 0 ? product.reorderPoint : undefined,
+      reorderPoint: typeof product.reorderPoint === 'number' && Number.isInteger(product.reorderPoint) && product.reorderPoint >= 0 ? product.reorderPoint : undefined,
       trackingMode,
       status: 'ACTIVE',
       serialNumbers: trackingMode === 'SERIAL' ? product.serialNumbers : undefined,

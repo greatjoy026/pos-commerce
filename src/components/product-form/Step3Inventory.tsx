@@ -290,9 +290,10 @@ export default function Step3Inventory({
           <input
             type="number"
             min="0"
+            step="1"
             disabled={hasVariants && variantCount > 0}
             value={hasVariants && variantCount > 0 ? computedVariantStock : stock}
-            onChange={(e) => setStock(Math.max(0, Number(e.target.value)))}
+            onChange={(e) => setStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
             className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono font-bold text-slate-900 disabled:opacity-75 focus:outline-hidden focus:ring-2 focus:ring-slate-950"
             id="input-inventory-stock"
           />
@@ -354,8 +355,9 @@ export default function Step3Inventory({
           <input
             type="number"
             min="0"
+            step="1"
             value={reorderPoint}
-            onChange={(e) => setReorderPoint(Math.max(0, Number(e.target.value)))}
+            onChange={(e) => setReorderPoint(Math.max(0, parseInt(e.target.value, 10) || 0))}
             className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-slate-950"
             id="input-inventory-reorder"
           />
