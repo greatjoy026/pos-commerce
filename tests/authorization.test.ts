@@ -236,8 +236,8 @@ export function isValidInventoryRecord(data: any): boolean {
     data.quantityReserved <= data.quantityOnHand &&
     typeof data.trackingMode === 'string' && ['QUANTITY', 'SERIAL', 'BATCH', 'NONE'].includes(data.trackingMode) &&
     typeof data.status === 'string' && ['ACTIVE', 'INACTIVE'].includes(data.status) &&
-    (!('createdAt' in data) || (typeof data.createdAt === 'string' && data.createdAt.length >= 10 && data.createdAt.length <= 60)) &&
-    (!('updatedAt' in data) || (typeof data.updatedAt === 'string' && data.updatedAt.length >= 10 && data.updatedAt.length <= 60)) &&
+    typeof data.createdAt === 'string' && data.createdAt.length >= 10 && data.createdAt.length <= 60 &&
+    typeof data.updatedAt === 'string' && data.updatedAt.length >= 10 && data.updatedAt.length <= 60 &&
     (!('reorderPoint' in data) || (Number.isInteger(data.reorderPoint) && data.reorderPoint >= 0)) &&
     (!('reorderQuantity' in data) || (Number.isInteger(data.reorderQuantity) && data.reorderQuantity >= 0))
   );
@@ -620,7 +620,9 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
           reorderPoint: 10,
           reorderQuantity: 50,
           trackingMode: 'QUANTITY',
-          status: 'ACTIVE'
+          status: 'ACTIVE',
+          createdAt: '2026-09-08T00:00:00.000Z',
+          updatedAt: '2026-09-08T00:00:00.000Z'
         };
         const canCreate = isInventoryStaff(inventoryUser) && isValidId(validRecord.id) && isValidInventoryRecord(validRecord);
         assert.strictEqual(canCreate, true);
@@ -645,7 +647,9 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
           quantityOnHand: 10,
           quantityReserved: 2,
           trackingMode: 'QUANTITY',
-          status: 'ACTIVE'
+          status: 'ACTIVE',
+          createdAt: '2026-09-08T00:00:00.000Z',
+          updatedAt: '2026-09-08T00:00:00.000Z'
         };
 
         // Negative quantityOnHand
@@ -1262,7 +1266,9 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
         quantityOnHand: 10,
         quantityReserved: 2,
         trackingMode: 'QUANTITY',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       };
 
       test('1. Valid discrete integer inventory record passes schema validation', () => {
@@ -1279,7 +1285,31 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
         assert.strictEqual(isValidInventoryRecord({ ...validBase, quantityOnHand: 5, quantityReserved: 6 }), false);
       });
 
-      test('4. SERIAL mode enforces cardinality equality, uniqueness, and non-empty elements', () => {
+      test('4. Enforces mandatory createdAt and updatedAt timestamps at security rules boundary (INV-001-F1.1)', () => {
+        // Missing createdAt rejected
+        const noCreatedAt = { ...validBase };
+        delete (noCreatedAt as any).createdAt;
+        assert.strictEqual(isValidInventoryRecord(noCreatedAt), false);
+
+        // Missing updatedAt rejected
+        const noUpdatedAt = { ...validBase };
+        delete (noUpdatedAt as any).updatedAt;
+        assert.strictEqual(isValidInventoryRecord(noUpdatedAt), false);
+
+        // Short / malformed createdAt (< 10 chars) rejected
+        assert.strictEqual(isValidInventoryRecord({ ...validBase, createdAt: '2026' }), false);
+
+        // Short / malformed updatedAt (< 10 chars) rejected
+        assert.strictEqual(isValidInventoryRecord({ ...validBase, updatedAt: '2026' }), false);
+
+        // Non-string createdAt rejected
+        assert.strictEqual(isValidInventoryRecord({ ...validBase, createdAt: 1234567890 }), false);
+
+        // Non-string updatedAt rejected
+        assert.strictEqual(isValidInventoryRecord({ ...validBase, updatedAt: 1234567890 }), false);
+      });
+
+      test('5. SERIAL mode enforces cardinality equality, uniqueness, and non-empty elements', () => {
         const serialValid = {
           ...validBase,
           quantityOnHand: 3,
@@ -1309,7 +1339,7 @@ describe('SEC-001 — Firestore Authorization Boundary & Security Rules', () => 
         assert.strictEqual(isValidInventoryRecord(serialZero), true);
       });
 
-      test('5. BATCH mode enforces mandatory batchNumber and bounded expiry string', () => {
+      test('6. BATCH mode enforces mandatory batchNumber and bounded expiry string', () => {
         const batchValid = {
           ...validBase,
           trackingMode: 'BATCH',

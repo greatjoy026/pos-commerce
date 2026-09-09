@@ -166,7 +166,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         reorderPoint: 10,
         reorderQuantity: 25,
         trackingMode: 'QUANTITY',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-03T09:00:00.000Z',
+        updatedAt: '2026-09-03T09:00:00.000Z'
       });
     });
   });
@@ -608,7 +610,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityReserved: 2,
         reorderPoint: 5,
         trackingMode: 'QUANTITY',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
     });
 
@@ -623,7 +627,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityOnHand: -5,
         quantityReserved: 0,
         trackingMode: 'QUANTITY',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
       // Reserved > onHand
       await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-over-res'), {
@@ -634,7 +640,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityOnHand: 5,
         quantityReserved: 10,
         trackingMode: 'QUANTITY',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
     });
 
@@ -658,7 +666,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityOnHand: 1.5,
         quantityReserved: 0,
         trackingMode: 'QUANTITY',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       // Fractional reserved rejected
@@ -670,8 +680,52 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityOnHand: 10,
         quantityReserved: 2.75,
         trackingMode: 'QUANTITY',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
+    });
+
+    it('REJECTS inventory creation missing mandatory createdAt or updatedAt timestamps (INV-001-F1.1)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+
+      const baseValid = {
+        id: 'inv-ts-test',
+        sku: 'TS-100',
+        productId: 'prod-ts-1',
+        locationId: 'loc-main-store',
+        quantityOnHand: 10,
+        quantityReserved: 0,
+        trackingMode: 'QUANTITY',
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
+      };
+
+      // 1. Missing createdAt rejected
+      const noCreatedAt = { ...baseValid };
+      delete (noCreatedAt as any).createdAt;
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-no-created-at'), noCreatedAt));
+
+      // 2. Missing updatedAt rejected
+      const noUpdatedAt = { ...baseValid };
+      delete (noUpdatedAt as any).updatedAt;
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-no-updated-at'), noUpdatedAt));
+
+      // 3. Short / malformed createdAt (< 10 chars) rejected
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-short-created-at'), {
+        ...baseValid,
+        createdAt: '2026'
+      }));
+
+      // 4. Short / malformed updatedAt (< 10 chars) rejected
+      await assertFails(setDoc(doc(invMgr, 'inventory', 'inv-short-updated-at'), {
+        ...baseValid,
+        updatedAt: '2026'
+      }));
+
+      // 5. Complete record with valid timestamps accepted
+      await assertSucceeds(setDoc(doc(invMgr, 'inventory', 'inv-valid-timestamps'), baseValid));
     });
 
     it('ENFORCES SERIAL tracking mode invariants at Firestore boundary (INV-001-F1.1)', async () => {
@@ -687,7 +741,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityReserved: 0,
         trackingMode: 'SERIAL',
         serialNumbers: ['SN-01', 'SN-02'],
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       // Empty string serial number in array rejected
@@ -700,7 +756,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityReserved: 0,
         trackingMode: 'SERIAL',
         serialNumbers: [''],
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       // Empty string in non-first position rejected (!hasAny(['']))
@@ -713,7 +771,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityReserved: 0,
         trackingMode: 'SERIAL',
         serialNumbers: ['SN-VALID-1', ''],
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       // Duplicate serials rejected by array uniqueness (toSet().size() == size())
@@ -726,7 +786,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityReserved: 0,
         trackingMode: 'SERIAL',
         serialNumbers: ['SN-DUPLICATE', 'SN-DUPLICATE'],
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       // Valid SERIAL record accepted
@@ -739,7 +801,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityReserved: 0,
         trackingMode: 'SERIAL',
         serialNumbers: ['SN-ALPHA', 'SN-BETA'],
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       // Valid zero-stock SERIAL record accepted
@@ -752,7 +816,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityReserved: 0,
         trackingMode: 'SERIAL',
         serialNumbers: [],
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
     });
 
@@ -768,7 +834,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityOnHand: 50,
         quantityReserved: 0,
         trackingMode: 'BATCH',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       // Empty batchNumber rejected
@@ -781,7 +849,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         quantityReserved: 0,
         trackingMode: 'BATCH',
         batchNumber: '',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       // BATCH with structurally invalid expiryDate (< 10 chars) rejected
@@ -795,7 +865,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         trackingMode: 'BATCH',
         batchNumber: 'LOT-2026-X',
         expiryDate: 'invalid',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       // Multiple batches for same SKU & location succeed at distinct document IDs
@@ -809,7 +881,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         trackingMode: 'BATCH',
         batchNumber: 'LOT-2026-001',
         expiryDate: '2027-06-30T00:00:00.000Z',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
 
       await assertSucceeds(setDoc(doc(invMgr, 'inventory', 'inv-drug-500-loc1-batch2'), {
@@ -822,7 +896,9 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
         trackingMode: 'BATCH',
         batchNumber: 'LOT-2026-002',
         expiryDate: '2027-12-31T00:00:00.000Z',
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        createdAt: '2026-09-08T00:00:00.000Z',
+        updatedAt: '2026-09-08T00:00:00.000Z'
       }));
     });
   });

@@ -279,8 +279,8 @@ service cloud.firestore {
              data.quantityReserved <= data.quantityOnHand &&
              data.trackingMode is string && data.trackingMode in ['QUANTITY', 'SERIAL', 'BATCH', 'NONE'] &&
              data.status is string && data.status in ['ACTIVE', 'INACTIVE'] &&
-             (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 60)) &&
-             (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 60)) &&
+             ('createdAt' in data) && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 60 &&
+             ('updatedAt' in data) && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 60 &&
              (!('reorderPoint' in data) || (data.reorderPoint is int && data.reorderPoint >= 0)) &&
              (!('reorderQuantity' in data) || (data.reorderQuantity is int && data.reorderQuantity >= 0)) &&
              // Tracking Mode Semantic Boundaries (INV-001-F1.1)
