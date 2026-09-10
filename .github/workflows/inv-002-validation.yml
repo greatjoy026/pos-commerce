@@ -14,6 +14,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
       # The repository currently has no committed npm lockfile, so npm ci/cache cannot be used yet.
       # Use npm install for validation until dependency reproducibility is formalized in CI hardening.
       - run: npm install --no-audit --no-fund
