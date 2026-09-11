@@ -19,9 +19,10 @@ jobs:
           distribution: temurin
           java-version: '21'
       # The repository currently has no committed npm lockfile, so npm ci/cache cannot be used yet.
-      # Use npm install for validation until dependency reproducibility is formalized in CI hardening.
       - run: npm install --no-audit --no-fund
       - run: npm run lint
       - run: npm test
       - run: npm run build
-      - run: npx firebase-tools emulators:exec --only firestore --project nexus-pos-commerce-test "npx tsx --test tests/emulator-rules.test.ts"
+      - run: npm install --prefix functions --no-audit --no-fund
+      - run: npm run build --prefix functions
+      - run: npx firebase-tools emulators:exec --only firestore --project nexus-pos-commerce-test "npx tsx --test tests/emulator-rules.test.ts tests/inventory-movement-security.test.ts"
