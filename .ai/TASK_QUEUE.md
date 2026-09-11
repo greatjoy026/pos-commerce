@@ -2,14 +2,23 @@
 
 ## 1. Active Tasks
 
+### `INV-002-F1 — Inventory Movement Integrity & Trusted Mutation Boundary`
+* **Priority**: P0/P1 architectural correction
+* **Type**: Security / Domain Service / Trusted Backend Boundary
+* **Owner**: Architecture Supervisor (direct implementation while Gemini generation unavailable)
+* **Status**: `IMPLEMENTATION IN PROGRESS — AWAITING CI AND ARCHITECTURAL REVIEW`
+* **Dependencies**: `INV-002` implementation
+* **Objective**: Close the authoritative inventory integrity gap by routing movement mutations through a trusted server-side callable boundary, preventing direct client creation of movement records and direct client balance mutation, preserving transaction/idempotency invariants, and adding emulator security coverage.
+* **Scope Boundary**: No POS checkout, e-commerce checkout, payment processing, offline synchronization, financial accounting, reservation subsystem, or full serial/batch lifecycle engine.
+
 ### `INV-002 — Ledger Movements & Transactional Allocation`
 * **Priority**: P1
 * **Type**: Domain Service / Inventory Movements
-* **Owner**: Architecture Supervisor (direct implementation while Gemini generation unavailable)
-* **Status**: `IMPLEMENTATION COMPLETE — AWAITING ARCHITECTURAL REVIEW`
+* **Owner**: Architecture Supervisor
+* **Status**: `CHANGES REQUIRED — INV-002-F1 ACTIVE`
 * **Dependencies**: `INV-001-F1.1` — APPROVED BY SUPERVISOR
 * **Objective**: Establish the authoritative transactional inventory mutation layer using immutable movement records, Firestore transactions, integer quantity invariants, insufficient-stock protection, idempotent operation IDs, and atomic inter-location transfers.
-* **Scope Boundary**: No POS checkout, e-commerce checkout, payment processing, offline synchronization, financial accounting, reservation subsystem, or full serial/batch lifecycle engine.
+* **Review Finding**: The initial application-layer movement service was not an exclusive trusted mutation boundary because authorized browser clients could still write inventory balances and movement records directly. INV-002-F1 closes this gap.
 
 ---
 
