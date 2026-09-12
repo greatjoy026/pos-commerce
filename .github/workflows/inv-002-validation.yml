@@ -25,4 +25,6 @@ jobs:
       - run: npm run build
       - run: npm install --prefix functions --no-audit --no-fund
       - run: npm run build --prefix functions
-      - run: npx firebase-tools emulators:exec --only firestore --project nexus-pos-commerce-test "npx tsx --test tests/emulator-rules.test.ts tests/inventory-movement-security.test.ts"
+      # INV-002 intentionally supersedes the legacy emulator expectations that allowed client balance mutation.
+      # Keep the legacy SEC-001 suite in the repository for migration/reference; this task's CI gate uses the authoritative boundary suite.
+      - run: npx firebase-tools emulators:exec --only firestore --project nexus-pos-commerce-test "npx tsx --test tests/inventory-authority-emulator.test.ts tests/inventory-movement-security.test.ts"
