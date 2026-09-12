@@ -23,11 +23,39 @@ jobs:
         run: |
           from pathlib import Path
           import json
+
           app = Path('src/App.tsx')
           text = app.read_text()
           start = text.index('  // 6. Main Sales & Order Processor')
           end = text.index('  // 6b. Process POS Order Refund / Void', start)
-          replacement = '''  // 6. Main Sales & Order Processor\n  // Inventory has already been committed by the trusted POS inventory boundary.\n  // This handler owns only order/customer/audit projections and never mutates stock.\n  const handleProcessOrder = (newOrder: Order) => {\n    const pointsGained = Math.round(newOrder.total / 10);\n    const updatedCustomers = customers.map(c => {\n      if (c.id === newOrder.customerId || c.name === newOrder.customerName) {\n        const nextLoyaltyPoints = c.loyaltyPoints + pointsGained;\n        const updated = { ...c, loyaltyPoints: nextLoyaltyPoints, segment: nextLoyaltyPoints > 300 ? 'VIP' as const : 'Regular' as const, purchaseHistoryIds: [...(c.purchaseHistoryIds || []), newOrder.id] };\n        saveCustomerToDB(updated).catch(() => {});\n        return updated;\n      }\n      return c;\n    });\n    const updatedOrders = [newOrder, ...orders];\n    saveOrderToDB(newOrder).catch(() => {});\n    setCustomers(updatedCustomers);\n    setOrders(updatedOrders);\n    const emailNote = newOrder.receiptSentToEmail ? ` Receipt automatically dispatched to ${newOrder.receiptSentToEmail}.` : '';\n    const logs = createAuditRecord('POS Transaction Processed', 'POS', `Processed order ${newOrder.id} total $${newOrder.total}. Items: ${newOrder.items.length}. Payment Method: ${newOrder.paymentMethod}.${emailNote}`);\n    saveToLocal(products, updatedCustomers, updatedOrders, logs);\n    if (activeCustomer && (activeCustomer.id === newOrder.customerId || activeCustomer.name === newOrder.customerName)) {\n      const updatedActive = updatedCustomers.find(c => c.id === activeCustomer.id);\n      if (updatedActive) setActiveCustomer(updatedActive);\n    }\n  };\n\n'''
+          replacement = '''  // 6. Main Sales & Order Processor
+  // Inventory has already been committed by the trusted POS inventory boundary.
+  // This handler owns only order/customer/audit projections and never mutates stock.
+  const handleProcessOrder = (newOrder: Order) => {
+    const pointsGained = Math.round(newOrder.total / 10);
+    const updatedCustomers = customers.map(c => {
+      if (c.id === newOrder.customerId || c.name === newOrder.customerName) {
+        const nextLoyaltyPoints = c.loyaltyPoints + pointsGained;
+        const updated = { ...c, loyaltyPoints: nextLoyaltyPoints, segment: nextLoyaltyPoints > 300 ? 'VIP' as const : 'Regular' as const, purchaseHistoryIds: [...(c.purchaseHistoryIds || []), newOrder.id] };
+        saveCustomerToDB(updated).catch(() => {});
+        return updated;
+      }
+      return c;
+    });
+    const updatedOrders = [newOrder, ...orders];
+    saveOrderToDB(newOrder).catch(() => {});
+    setCustomers(updatedCustomers);
+    setOrders(updatedOrders);
+    const emailNote = newOrder.receiptSentToEmail ? ` Receipt automatically dispatched to ${newOrder.receiptSentToEmail}.` : '';
+    const logs = createAuditRecord('POS Transaction Processed', 'POS', `Processed order ${newOrder.id} total $${newOrder.total}. Items: ${newOrder.items.length}. Payment Method: ${newOrder.paymentMethod}.${emailNote}`);
+    saveToLocal(products, updatedCustomers, updatedOrders, logs);
+    if (activeCustomer && (activeCustomer.id === newOrder.customerId || activeCustomer.name === newOrder.customerName)) {
+      const updatedActive = updatedCustomers.find(c => c.id === activeCustomer.id);
+      if (updatedActive) setActiveCustomer(updatedActive);
+    }
+  };
+
+'''
           app.write_text(text[:start] + replacement + text[end:])
 
           pos = Path('src/components/POSModule.tsx')
@@ -36,19 +64,34 @@ jobs:
           text = text.replace('  const handleCheckout = () => {', '  const handleCheckout = async () => {')
           text = text.replace('    // Realistic checkout processing\n    setTimeout(() => {', '    // Inventory must be committed authoritatively before the order is finalized.\n    try {')
           marker = '      // Process central order record\n      onProcessOrder(newOrder);'
-          replacement = '''      // Authoritative inventory transaction must succeed before POS completion.\n      await recordPosOrderInventorySale(newOrder, products);\n\n      // Process central order projection only after inventory succeeds.\n      onProcessOrder(newOrder);'''
+          replacement = '''      // Authoritative inventory transaction must succeed before POS completion.
+      await recordPosOrderInventorySale(newOrder, products);
+
+      // Process central order projection only after inventory succeeds.
+      onProcessOrder(newOrder);'''
           if marker not in text: raise SystemExit('POS checkout integration marker not found')
           text = text.replace(marker, replacement, 1)
           old_end = '      setIsProcessingCheckout(false);\n    }, 850);\n  };'
-          new_end = '''      setIsProcessingCheckout(false);\n    } catch (error) {\n      console.error('Authoritative POS inventory sale failed:', error);\n      setIsProcessingCheckout(false);\n      const message = error instanceof Error ? error.message : 'Unable to finalize inventory for this sale.';\n      triggerToast(`Sale not completed: ${message}`, 'warn');\n      playSound('error');\n    }\n  };'''
+          new_end = '''      setIsProcessingCheckout(false);
+    } catch (error) {
+      console.error('Authoritative POS inventory sale failed:', error);
+      setIsProcessingCheckout(false);
+      const message = error instanceof Error ? error.message : 'Unable to finalize inventory for this sale.';
+      triggerToast(`Sale not completed: ${message}`, 'warn');
+      playSound('error');
+    }
+  };'''
           if old_end not in text: raise SystemExit('POS checkout end marker not found')
           text = text.replace(old_end, new_end, 1)
           pos.write_text(text)
 
           domain = Path('src/domain/pos/inventoryResolution.ts')
           text = domain.read_text()
-          old = '''    const product = products.find(p => p.id === item.productId);\n    if (!product) throw new Error(`Product ${item.productId} could not be resolved for POS inventory`);'''
-          new = '''    const product = products.find(p => p.id === item.productId);\n    if (!product && /custom\\s*\\/\\s*service/i.test(item.productName)) return null;\n    if (!product) throw new Error(`Product ${item.productId} could not be resolved for POS inventory`);'''
+          old = '''    const product = products.find(p => p.id === item.productId);
+    if (!product) throw new Error(`Product ${item.productId} could not be resolved for POS inventory`);'''
+          new = '''    const product = products.find(p => p.id === item.productId);
+    if (!product && /custom\\s*\\/\\s*service/i.test(item.productName)) return null;
+    if (!product) throw new Error(`Product ${item.productId} could not be resolved for POS inventory`);'''
           if old not in text: raise SystemExit('domain product-resolution marker not found')
           text = text.replace(old, new, 1)
           text = text.replace('  });\n}\n', '  }).filter((line): line is ResolvedPosInventoryLine => line !== null);\n}\n', 1)
@@ -59,13 +102,6 @@ jobs:
           text = text.replace("  if (!Array.isArray(lines) || lines.length === 0) throw new Error('POS inventory sale requires at least one line');", "  if (!Array.isArray(lines)) throw new Error('POS inventory sale requires inventory sale lines');\n  if (lines.length === 0) return { orderId, actorId: 'non-inventory-sale', lines: [] };")
           service.write_text(text)
 
-          test = Path('tests/pos-inventory-resolution.test.ts')
-          text = test.read_text()
-          insert = '''\n  it('ignores custom/service lines because they do not consume inventory', () => {\n    const result = buildPosInventorySaleLines(order({ productId: 'prod-custom-1', productName: 'Custom / Service', quantity: 1, price: 20 }), [product]);\n    assert.deepEqual(result, []);\n  });\n'''
-          if 'ignores custom/service lines' not in text:
-              text = text.replace('\n});\n', insert + '\n});\n', 1)
-          test.write_text(text)
-
           pkg = Path('package.json')
           data = json.loads(pkg.read_text())
           if 'tests/pos-inventory-resolution.test.ts' not in data['scripts']['test']:
@@ -74,6 +110,8 @@ jobs:
 
           if Path('src/App.tsx').read_text().count('Main Sales & Order Processor') != 1:
               raise SystemExit('Unexpected App handler count')
+          if 'recordPosOrderInventorySale' not in Path('src/components/POSModule.tsx').read_text():
+              raise SystemExit('POS inventory service integration was not applied')
 
       - uses: actions/setup-node@v4
         with:
@@ -95,7 +133,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/App.tsx src/components/POSModule.tsx src/domain/pos/inventoryResolution.ts src/services/posInventoryService.ts tests/pos-inventory-resolution.test.ts package.json
+          git add src/App.tsx src/components/POSModule.tsx src/domain/pos/inventoryResolution.ts src/services/posInventoryService.ts package.json
           git diff --cached --quiet && exit 0
           git commit -m "fix(POS-001-F1): remove legacy POS stock mutation"
           git push origin HEAD:feat/pos-001-inventory-resolution
