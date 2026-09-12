@@ -41,19 +41,24 @@ async function executeMovement(request: CallableRequest<MovementRequest>, moveme
   const actor = await getStaffActor(request); const data = request.data;
   if (!data || typeof data !== 'object') fail('Invalid movement request');
   assertString(data.inventoryId, 'inventoryId'); assertOperationId(data.operationId); assertOptionalString(data.referenceId, 'referenceId'); assertOptionalString(data.reason, 'reason', 1000);
-  const delta = movementType === 'ADJUSTMENT' ? data.quantityDelta : (movementType === 'SALE' ? -(data.quantity ?? NaN) : (data.quantity ?? NaN));
-  if (movementType === 'ADJUSTMENT') assertNonZeroInteger(delta); else assertPositiveInteger(data.quantity, 'quantity');
+  let delta: number;
+  let quantity: number | undefined;
+  if (movementType === 'ADJUSTMENT') { assertNonZeroInteger(data.quantityDelta); delta = data.quantityDelta; }
+  else { assertPositiveInteger(data.quantity, 'quantity'); quantity = data.quantity; delta = movementType === 'SALE' ? -quantity : quantity; }
   const movementRef = db.doc(`${MOVEMENTS}/${movementId(data.operationId)}`); const inventoryRef = db.doc(`${INVENTORY}/${data.inventoryId}`);
   return db.runTransaction(async tx => {
     const existingSnap = await tx.get(movementRef); const inventorySnap = await tx.get(inventoryRef);
     if (!inventorySnap.exists) throw new HttpsError('not-found', 'Inventory record not found');
     const inventory = parseInventory(inventorySnap.data(), inventorySnap.id);
-    if (existingSnap.exists) { const existing = existingSnap.data() as InventoryMovementRecord; assertExisting(existing, buildMovement(existing.id, inventory, movementType, delta, actor, data.referenceId, data.reason)); return { movement: existing, inventory }; }
-    if (movementType === 'SALE') assertAvailable(inventory, data.quantity!);
-    const movement = buildMovement(movementRef.id, inventory, movementType, delta, actor, data.referenceId, data.reason);
+    const candidate = buildMovement(movementRef.id, inventory, movementType, delta, actor, data.referenceId, data.reason);
+    if (existingSnap.exists) { const existing = existingSnap.data() as InventoryMovementRecord; assertExisting(existing, candidate); return { movement: existing, inventory }; }
+    if (movementType === 'SALE') assertAvailable(inventory, quantity!);
+    const movement = candidate;
     const updated: InventoryRecord = { ...inventory, quantityOnHand: movement.quantityAfter, updatedAt: new Date().toISOString() };
     if (!validateInventoryRecord(updated).isValid) throw new HttpsError('failed-precondition', 'Movement violates inventory invariants');
-    tx.update(inventoryRef, updated); tx.create(movementRef, movement); return { movement, inventory: updated };
+    tx.update(inventoryRef, { quantityOnHand: updated.quantityOnHand, updatedAt: updated.updatedAt });
+    tx.create(movementRef, movement);
+    return { movement, inventory: updated };
   });
 }
 export const recordInventoryPurchaseReceipt = onCall<MovementRequest>(async request => executeMovement(request, 'PURCHASE_RECEIPT'));
@@ -65,16 +70,18 @@ export const recordInventoryTransfer = onCall<TransferRequest>(async request => 
   if (!data || typeof data !== 'object') fail('Invalid transfer request');
   assertString(data.sourceInventoryId, 'sourceInventoryId'); assertString(data.destinationInventoryId, 'destinationInventoryId'); assertOperationId(data.operationId); assertPositiveInteger(data.quantity, 'quantity'); assertOptionalString(data.referenceId, 'referenceId'); assertOptionalString(data.reason, 'reason', 1000);
   if (data.sourceInventoryId === data.destinationInventoryId) fail('Source and destination must differ');
+  const quantity = data.quantity;
   const sourceRef = db.doc(`${INVENTORY}/${data.sourceInventoryId}`); const destinationRef = db.doc(`${INVENTORY}/${data.destinationInventoryId}`); const outboundRef = db.doc(`${MOVEMENTS}/${movementId(data.operationId, '_out')}`); const inboundRef = db.doc(`${MOVEMENTS}/${movementId(data.operationId, '_in')}`);
   return db.runTransaction(async tx => {
     const outboundSnap = await tx.get(outboundRef); const inboundSnap = await tx.get(inboundRef); const sourceSnap = await tx.get(sourceRef); const destinationSnap = await tx.get(destinationRef);
     if (!sourceSnap.exists || !destinationSnap.exists) throw new HttpsError('not-found', 'Transfer inventory record not found');
     const source = parseInventory(sourceSnap.data(), sourceSnap.id); const destination = parseInventory(destinationSnap.data(), destinationSnap.id);
-    if (outboundSnap.exists || inboundSnap.exists) { if (!outboundSnap.exists || !inboundSnap.exists) throw new HttpsError('already-exists', 'Transfer idempotency state is incomplete'); const outbound = outboundSnap.data() as InventoryMovementRecord; const inbound = inboundSnap.data() as InventoryMovementRecord; assertExisting(outbound, buildMovement(outbound.id, source, 'TRANSFER', -data.quantity, actor, data.referenceId, data.reason)); assertExisting(inbound, buildMovement(inbound.id, destination, 'TRANSFER', data.quantity, actor, data.referenceId, data.reason)); return { outboundMovement: outbound, inboundMovement: inbound, sourceInventory: source, destinationInventory: destination }; }
-    assertAvailable(source, data.quantity);
-    const outbound = buildMovement(outboundRef.id, source, 'TRANSFER', -data.quantity, actor, data.referenceId, data.reason); const inbound = buildMovement(inboundRef.id, destination, 'TRANSFER', data.quantity, actor, data.referenceId, data.reason);
+    if (outboundSnap.exists || inboundSnap.exists) { if (!outboundSnap.exists || !inboundSnap.exists) throw new HttpsError('already-exists', 'Transfer idempotency state is incomplete'); const outbound = outboundSnap.data() as InventoryMovementRecord; const inbound = inboundSnap.data() as InventoryMovementRecord; assertExisting(outbound, buildMovement(outbound.id, source, 'TRANSFER', -quantity, actor, data.referenceId, data.reason)); assertExisting(inbound, buildMovement(inbound.id, destination, 'TRANSFER', quantity, actor, data.referenceId, data.reason)); return { outboundMovement: outbound, inboundMovement: inbound, sourceInventory: source, destinationInventory: destination }; }
+    assertAvailable(source, quantity);
+    const outbound = buildMovement(outboundRef.id, source, 'TRANSFER', -quantity, actor, data.referenceId, data.reason); const inbound = buildMovement(inboundRef.id, destination, 'TRANSFER', quantity, actor, data.referenceId, data.reason);
     const updatedSource: InventoryRecord = { ...source, quantityOnHand: outbound.quantityAfter, updatedAt: new Date().toISOString() }; const updatedDestination: InventoryRecord = { ...destination, quantityOnHand: inbound.quantityAfter, updatedAt: new Date().toISOString() };
     if (!validateInventoryRecord(updatedSource).isValid || !validateInventoryRecord(updatedDestination).isValid) throw new HttpsError('failed-precondition', 'Transfer violates inventory invariants');
-    tx.update(sourceRef, updatedSource); tx.update(destinationRef, updatedDestination); tx.create(outboundRef, outbound); tx.create(inboundRef, inbound); return { outboundMovement: outbound, inboundMovement: inbound, sourceInventory: updatedSource, destinationInventory: updatedDestination };
+    tx.update(sourceRef, { quantityOnHand: updatedSource.quantityOnHand, updatedAt: updatedSource.updatedAt }); tx.update(destinationRef, { quantityOnHand: updatedDestination.quantityOnHand, updatedAt: updatedDestination.updatedAt }); tx.create(outboundRef, outbound); tx.create(inboundRef, inbound);
+    return { outboundMovement: outbound, inboundMovement: inbound, sourceInventory: updatedSource, destinationInventory: updatedDestination };
   });
 });
