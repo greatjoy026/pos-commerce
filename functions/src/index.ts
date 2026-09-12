@@ -5,3 +5,5 @@ export {
   recordInventoryAdjustment,
   recordInventoryTransfer,
 } from './inventoryMovements';
+
+export { recordPosSale } from './posInventory';

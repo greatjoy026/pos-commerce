@@ -324,123 +324,30 @@ export default function App() {
     }
   };
 
-  // 6. Main Sales & Order Processor (decrements inventory, increments customer loyalty)
+  // 6. Main Sales & Order Processor
+  // Inventory has already been committed by the trusted POS inventory boundary.
+  // This handler owns only order/customer/audit projections and never mutates stock.
   const handleProcessOrder = (newOrder: Order) => {
-    // 1. Decrement product inventories (taking into account PackagingUnits multipliers and variants)
-    const updatedProducts = products.map(p => {
-      const orderItem = newOrder.items.find(item => item.productId === p.id);
-      if (orderItem) {
-        // Calculate units to deduct based on multiplier relationship (e.g., box_of_30_bars -> 30 pcs, retail unit -> 1 pc)
-        const multiplier = orderItem.unitMultiplier || (orderItem.packagingUnitName ? (p.packagingUnits?.find(u => u.unitName === orderItem.packagingUnitName)?.multiplier || 1) : 1);
-        const totalBaseUnitsDeducted = orderItem.quantity * multiplier;
-        const nextStock = Math.max(0, p.stock - totalBaseUnitsDeducted);
-
-        // Handle dual_stock or auto_depackage packaging structures
-        let nextPackaging = p.packaging;
-        if (p.packaging?.hasPackaging) {
-          if (p.packaging.inventoryTrackingMode === 'dual_stock') {
-            let sealed = p.packaging.sealedPackageStock || 0;
-            let loose = p.packaging.looseUnitStock ?? p.stock;
-            const unitsPerPkg = p.packaging.unitsPerPackage || 1;
-
-            if (orderItem.sellingMode === 'pack_selling' && multiplier >= unitsPerPkg) {
-              const fullPacksSold = Math.floor(totalBaseUnitsDeducted / unitsPerPkg);
-              if (sealed >= fullPacksSold) {
-                sealed -= fullPacksSold;
-              } else {
-                const deficitPacks = fullPacksSold - sealed;
-                sealed = 0;
-                loose = Math.max(0, loose - (deficitPacks * unitsPerPkg));
-              }
-            } else {
-              // Retail unit or smaller sub-pack
-              if (loose >= totalBaseUnitsDeducted) {
-                loose -= totalBaseUnitsDeducted;
-              } else {
-                // Auto-break bulk for retail fulfillment
-                const deficit = totalBaseUnitsDeducted - loose;
-                const boxesToOpen = Math.min(sealed, Math.ceil(deficit / unitsPerPkg));
-                sealed -= boxesToOpen;
-                loose = Math.max(0, (loose + (boxesToOpen * unitsPerPkg)) - totalBaseUnitsDeducted);
-              }
-            }
-
-            nextPackaging = {
-              ...p.packaging,
-              sealedPackageStock: sealed,
-              looseUnitStock: loose
-            };
-          } else {
-            // auto_depackage mode
-            nextPackaging = {
-              ...p.packaging,
-              looseUnitStock: nextStock,
-              sealedPackageStock: 0
-            };
-          }
-        }
-
-        // decrement variant stock if variant matches
-        const updatedVariants = p.variants.map(v => {
-          if (orderItem.variantSku && v.sku === orderItem.variantSku) {
-            return { ...v, stock: Math.max(0, v.stock - totalBaseUnitsDeducted) };
-          }
-          return v;
-        });
-
-        const updated = { 
-          ...p, 
-          stock: nextStock, 
-          packaging: nextPackaging,
-          variants: updatedVariants, 
-          salesCount: p.salesCount + totalBaseUnitsDeducted 
-        };
-        saveProductToDB(updated).catch(() => {});
-        return updated;
-      }
-      return p;
-    });
-
-    // 2. Increment customer loyalty points (e.g., 10% of order total is points, plus past orders tracking)
     const pointsGained = Math.round(newOrder.total / 10);
     const updatedCustomers = customers.map(c => {
       if (c.id === newOrder.customerId || c.name === newOrder.customerName) {
-        const updated = { 
-          ...c, 
-          loyaltyPoints: c.loyaltyPoints + pointsGained,
-          segment: c.loyaltyPoints + pointsGained > 300 ? 'VIP' as const : 'Regular' as const,
-          purchaseHistoryIds: [...(c.purchaseHistoryIds || []), newOrder.id]
-        };
+        const nextLoyaltyPoints = c.loyaltyPoints + pointsGained;
+        const updated = { ...c, loyaltyPoints: nextLoyaltyPoints, segment: nextLoyaltyPoints > 300 ? 'VIP' as const : 'Regular' as const, purchaseHistoryIds: [...(c.purchaseHistoryIds || []), newOrder.id] };
         saveCustomerToDB(updated).catch(() => {});
         return updated;
       }
       return c;
     });
-
-    // 3. Save order
     const updatedOrders = [newOrder, ...orders];
     saveOrderToDB(newOrder).catch(() => {});
-
-    setProducts(updatedProducts);
     setCustomers(updatedCustomers);
     setOrders(updatedOrders);
-
-    // 4. Record audit log
     const emailNote = newOrder.receiptSentToEmail ? ` Receipt automatically dispatched to ${newOrder.receiptSentToEmail}.` : '';
-    const logs = createAuditRecord(
-      'POS Transaction Processed',
-      'POS',
-      `Processed order ${newOrder.id} total $${newOrder.total}. Items: ${newOrder.items.length}. Payment Method: ${newOrder.paymentMethod}.${emailNote}`
-    );
-
-    saveToLocal(updatedProducts, updatedCustomers, updatedOrders, logs);
-
-    // If customer was active customer, update state
+    const logs = createAuditRecord('POS Transaction Processed', 'POS', `Processed order ${newOrder.id} total $${newOrder.total}. Items: ${newOrder.items.length}. Payment Method: ${newOrder.paymentMethod}.${emailNote}`);
+    saveToLocal(products, updatedCustomers, updatedOrders, logs);
     if (activeCustomer && (activeCustomer.id === newOrder.customerId || activeCustomer.name === newOrder.customerName)) {
       const updatedActive = updatedCustomers.find(c => c.id === activeCustomer.id);
-      if (updatedActive) {
-        setActiveCustomer(updatedActive);
-      }
+      if (updatedActive) setActiveCustomer(updatedActive);
     }
   };
 

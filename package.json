@@ -9,9 +9,10 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/authorization.test.ts tests/product-domain.test.ts tests/inventory-domain.test.ts tests/inventory-movement.test.ts",
+    "test": "tsx --test tests/authorization.test.ts tests/product-domain.test.ts tests/inventory-domain.test.ts tests/inventory-movement.test.ts tests/pos-inventory-resolution.test.ts",
     "test:domain": "tsx --test tests/product-domain.test.ts",
     "test:inventory": "tsx --test tests/inventory-domain.test.ts tests/inventory-movement.test.ts",
+    "test:pos": "tsx --test tests/pos-inventory-resolution.test.ts",
     "test:emulator": "firebase emulators:exec --only firestore --project gen-lang-client-0207800002 \"npx tsx --test tests/emulator-rules.test.ts\""
   },
   "dependencies": {
