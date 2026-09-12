@@ -1,237 +1,30 @@
 {
   "entities": {
-    "product": {
-      "title": "Product",
-      "description": "Internal inventory product item with confidential costs, suppliers, and operational parameters",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "sku": { "type": "string" },
-        "price": { "type": "number" },
-        "cost": { "type": "number" },
-        "stock": { "type": "number" },
-        "category": { "type": "string" },
-        "location": { "type": "string" },
-        "reorderPoint": { "type": "number" },
-        "barcode": { "type": "string" },
-        "qrCode": { "type": "string" },
-        "salesCount": { "type": "number" }
-      },
-      "required": ["id", "name", "sku", "price", "stock", "category"]
-    },
-    "publicProduct": {
-      "title": "PublicProductProjection",
-      "description": "Public-safe storefront product projection omitting confidential supplier, cost, and exact stock data, providing categorical availability status",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "sku": { "type": "string" },
-        "price": { "type": "number" },
-        "category": { "type": "string" },
-        "availability": {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "enum": ["IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK"]
-            }
-          },
-          "required": ["status"]
-        },
-        "imageUrl": { "type": "string" },
-        "description": { "type": "string" },
-        "rating": { "type": "number" },
-        "reviewCount": { "type": "number" },
-        "publishOnline": { "type": "boolean" }
-      },
-      "required": ["id", "name", "sku", "price", "category", "availability"]
-    },
-    "customer": {
-      "title": "Customer",
-      "description": "Customer CRM account record",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "email": { "type": "string" },
-        "phone": { "type": "string" },
-        "loyaltyPoints": { "type": "number" },
-        "segment": { "type": "string" }
-      },
-      "required": ["id", "name", "email"]
-    },
-    "staff": {
-      "title": "StaffMember",
-      "description": "Staff operator user account directory (credentials segregated)",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "email": { "type": "string" },
-        "role": { "type": "string" },
-        "avatar": { "type": "string" },
-        "status": { "type": "string" }
-      },
-      "required": ["id", "name", "email", "role"]
-    },
-    "staffCredentials": {
-      "title": "StaffCredentialsVault",
-      "description": "Segregated credential store for staff PINs and secrets (no client-side reads)",
-      "type": "object",
-      "properties": {
-        "staffId": { "type": "string" },
-        "hashedPin": { "type": "string" },
-        "salt": { "type": "string" },
-        "updatedAt": { "type": "string" }
-      },
-      "required": ["staffId"]
-    },
-    "order": {
-      "title": "Order",
-      "description": "POS or eCommerce sale order receipt",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "date": { "type": "string" },
-        "subtotal": { "type": "number" },
-        "tax": { "type": "number" },
-        "discount": { "type": "number" },
-        "total": { "type": "number" },
-        "paymentMethod": { "type": "string" },
-        "channel": { "type": "string" },
-        "status": { "type": "string" },
-        "customerId": { "type": "string" }
-      },
-      "required": ["id", "date", "subtotal", "total", "paymentMethod", "channel", "status"]
-    },
-    "auditLog": {
-      "title": "AuditLog",
-      "description": "Security audit ledger item",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "timestamp": { "type": "string" },
-        "staffName": { "type": "string" },
-        "role": { "type": "string" },
-        "action": { "type": "string" },
-        "module": { "type": "string" },
-        "details": { "type": "string" }
-      },
-      "required": ["id", "timestamp", "staffName", "role", "action", "module", "details"]
-    },
-    "settings": {
-      "title": "SystemSettings",
-      "description": "Internal enterprise store settings and active currency (staff only)",
-      "type": "object",
-      "properties": {
-        "currency": { "type": "string" },
-        "businessName": { "type": "string" },
-        "taxRate": { "type": "number" },
-        "enableSoundEffects": { "type": "boolean" },
-        "lowStockThreshold": { "type": "number" }
-      },
-      "required": ["currency", "businessName", "taxRate"]
-    },
-    "publicSettings": {
-      "title": "PublicSettingsProjection",
-      "description": "Public storefront-safe settings projection omitting confidential supervisor PINs, printer configs, and security settings",
-      "type": "object",
-      "properties": {
-        "currency": { "type": "string" },
-        "businessName": { "type": "string" },
-        "taxRate": { "type": "number" }
-      },
-      "required": ["currency", "businessName", "taxRate"]
-    },
-    "shiftReport": {
-      "title": "ShiftReport",
-      "description": "POS register shift reconciliation, drawer float, and Z-reading ledger record",
-      "type": "object",
-      "properties": {
-        "reportId": { "type": "string" },
-        "terminalId": { "type": "string" },
-        "staffName": { "type": "string" },
-        "shiftStartTime": { "type": "string" },
-        "totalSales": { "type": "number" },
-        "grossSales": { "type": "number" },
-        "openingFloat": { "type": "number" },
-        "actualDrawerCash": { "type": "number" },
-        "variance": { "type": "number" },
-        "notes": { "type": "string" }
-      },
-      "required": ["reportId", "terminalId", "staffName", "shiftStartTime", "totalSales"]
-    },
-    "inventoryRecord": {
-      "title": "InventoryRecord",
-      "description": "Authoritative operational inventory state for an SKU at a location (INV-001 / INV-001-F1)",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "sku": { "type": "string" },
-        "productId": { "type": "string" },
-        "variantId": { "type": "string" },
-        "locationId": { "type": "string" },
-        "quantityOnHand": { "type": "integer" },
-        "quantityReserved": { "type": "integer" },
-        "trackingMode": { "type": "string" },
-        "status": { "type": "string" },
-        "reorderPoint": { "type": "integer" },
-        "reorderQuantity": { "type": "integer" },
-        "serialNumbers": { "type": "array" },
-        "batchNumber": { "type": "string" },
-        "expiryDate": { "type": "string" },
-        "createdAt": { "type": "string" },
-        "updatedAt": { "type": "string" }
-      },
-      "required": ["id", "sku", "productId", "locationId", "quantityOnHand", "quantityReserved", "trackingMode", "status", "createdAt", "updatedAt"]
-    }
+    "product": {"title":"Product","description":"Internal inventory product item with confidential costs, suppliers, and operational parameters","type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"sku":{"type":"string"},"price":{"type":"number"},"cost":{"type":"number"},"stock":{"type":"number"},"category":{"type":"string"},"location":{"type":"string"},"reorderPoint":{"type":"number"},"barcode":{"type":"string"},"qrCode":{"type":"string"},"salesCount":{"type":"number"}},"required":["id","name","sku","price","stock","category"]},
+    "publicProduct":{"title":"PublicProductProjection","description":"Public-safe storefront product projection omitting confidential supplier, cost, and exact stock data, providing categorical availability status","type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"sku":{"type":"string"},"price":{"type":"number"},"category":{"type":"string"},"availability":{"type":"object","properties":{"status":{"type":"string","enum":["IN_STOCK","LOW_STOCK","OUT_OF_STOCK"]}},"required":["status"]},"imageUrl":{"type":"string"},"description":{"type":"string"},"rating":{"type":"number"},"reviewCount":{"type":"number"},"publishOnline":{"type":"boolean"}},"required":["id","name","sku","price","category","availability"]},
+    "customer":{"title":"Customer","description":"Customer CRM account record","type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"email":{"type":"string"},"phone":{"type":"string"},"loyaltyPoints":{"type":"number"},"segment":{"type":"string"}},"required":["id","name","email"]},
+    "staff":{"title":"StaffMember","description":"Staff operator user account directory (credentials segregated)","type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"email":{"type":"string"},"role":{"type":"string"},"avatar":{"type":"string"},"status":{"type":"string"}},"required":["id","name","email","role"]},
+    "staffCredentials":{"title":"StaffCredentialsVault","description":"Segregated credential store for staff PINs and secrets (no client-side reads)","type":"object","properties":{"staffId":{"type":"string"},"hashedPin":{"type":"string"},"salt":{"type":"string"},"updatedAt":{"type":"string"}},"required":["staffId"]},
+    "order":{"title":"Order","description":"POS or eCommerce sale order receipt","type":"object","properties":{"id":{"type":"string"},"date":{"type":"string"},"subtotal":{"type":"number"},"tax":{"type":"number"},"discount":{"type":"number"},"total":{"type":"number"},"paymentMethod":{"type":"string"},"channel":{"type":"string"},"status":{"type":"string"},"customerId":{"type":"string"}},"required":["id","date","subtotal","total","paymentMethod","channel","status"]},
+    "auditLog":{"title":"AuditLog","description":"Security audit ledger item","type":"object","properties":{"id":{"type":"string"},"timestamp":{"type":"string"},"staffName":{"type":"string"},"role":{"type":"string"},"action":{"type":"string"},"module":{"type":"string"},"details":{"type":"string"}},"required":["id","timestamp","staffName","role","action","module","details"]},
+    "settings":{"title":"SystemSettings","description":"Internal enterprise store settings and active currency (staff only)","type":"object","properties":{"currency":{"type":"string"},"businessName":{"type":"string"},"taxRate":{"type":"number"},"enableSoundEffects":{"type":"boolean"},"lowStockThreshold":{"type":"number"}},"required":["currency","businessName","taxRate"]},
+    "publicSettings":{"title":"PublicSettingsProjection","description":"Public storefront-safe settings projection omitting confidential supervisor PINs, printer configs, and security settings","type":"object","properties":{"currency":{"type":"string"},"businessName":{"type":"string"},"taxRate":{"type":"number"}},"required":["currency","businessName","taxRate"]},
+    "shiftReport":{"title":"ShiftReport","description":"POS register shift reconciliation, drawer float, and Z-reading ledger record","type":"object","properties":{"reportId":{"type":"string"},"terminalId":{"type":"string"},"staffName":{"type":"string"},"shiftStartTime":{"type":"string"},"totalSales":{"type":"number"},"grossSales":{"type":"number"},"openingFloat":{"type":"number"},"actualDrawerCash":{"type":"number"},"variance":{"type":"number"},"notes":{"type":"string"}},"required":["reportId","terminalId","staffName","shiftStartTime","totalSales"]},
+    "inventoryRecord":{"title":"InventoryRecord","description":"Authoritative operational inventory state for an SKU at a location (INV-001 / INV-001-F1)","type":"object","properties":{"id":{"type":"string"},"sku":{"type":"string"},"productId":{"type":"string"},"variantId":{"type":"string"},"locationId":{"type":"string"},"quantityOnHand":{"type":"integer"},"quantityReserved":{"type":"integer"},"trackingMode":{"type":"string"},"status":{"type":"string"},"reorderPoint":{"type":"integer"},"reorderQuantity":{"type":"integer"},"serialNumbers":{"type":"array"},"batchNumber":{"type":"string"},"expiryDate":{"type":"string"},"createdAt":{"type":"string"},"updatedAt":{"type":"string"}},"required":["id","sku","productId","locationId","quantityOnHand","quantityReserved","trackingMode","status","createdAt","updatedAt"]},
+    "inventoryMovement":{"title":"InventoryMovementRecord","description":"Immutable server-authored inventory state-change record produced by the INV-002 trusted transactional movement functions","type":"object","properties":{"id":{"type":"string"},"inventoryId":{"type":"string"},"sku":{"type":"string"},"locationId":{"type":"string"},"movementType":{"type":"string","enum":["PURCHASE_RECEIPT","SALE","RETURN","ADJUSTMENT","TRANSFER"]},"quantityDelta":{"type":"integer"},"quantityBefore":{"type":"integer"},"quantityAfter":{"type":"integer"},"referenceId":{"type":"string"},"performedBy":{"type":"string"},"timestamp":{"type":"string"},"reason":{"type":"string"}},"required":["id","inventoryId","sku","locationId","movementType","quantityDelta","quantityBefore","quantityAfter","performedBy","timestamp"]}
   },
   "firestore": {
-    "/inventory/{inventoryId}": {
-      "schema": "inventoryRecord",
-      "description": "Authoritative inventory state records for SKUs across locations (staff only - INV-001)"
-    },
-    "/products/{productId}": {
-      "schema": "product",
-      "description": "Internal inventory catalog with wholesale costs, reorder levels, and tracking rules (staff only)"
-    },
-    "/public_products/{productId}": {
-      "schema": "publicProduct",
-      "description": "Public customer storefront catalog projection omitting sensitive internal margins and suppliers"
-    },
-    "/customers/{customerId}": {
-      "schema": "customer",
-      "description": "Store registered customers, loyalty points, and profiles"
-    },
-    "/staff/{staffId}": {
-      "schema": "staff",
-      "description": "Store authenticated staff accounts, roles, and status (no credentials)"
-    },
-    "/staff_credentials/{staffId}": {
-      "schema": "staffCredentials",
-      "description": "Segregated credential store for staff PINs and secrets (client reads prohibited)"
-    },
-    "/orders/{orderId}": {
-      "schema": "order",
-      "description": "Store point of sale and eCommerce sales orders and invoices"
-    },
-    "/audit_logs/{logId}": {
-      "schema": "auditLog",
-      "description": "Immutable security and activity audit records"
-    },
-    "/settings/{settingId}": {
-      "schema": "settings",
-      "description": "Global enterprise POS system and currency configuration (internal staff only)"
-    },
-    "/public_settings/{settingId}": {
-      "schema": "publicSettings",
-      "description": "Public storefront-safe settings projection omitting confidential configurations"
-    },
-    "/shift_reports/{shiftId}": {
-      "schema": "shiftReport",
-      "description": "Store POS cash drawer float reconciliation and shift closeout ledger records"
-    }
+    "/inventory/{inventoryId}":{"schema":"inventoryRecord","description":"Authoritative inventory state. Clients may create only zero-balance records; balance updates and deletes are server-authoritative through INV-002."},
+    "/inventory_movements/{movementId}":{"schema":"inventoryMovement","description":"Append-only immutable movement ledger server-authored by trusted INV-002 functions; client writes are denied."},
+    "/products/{productId}":{"schema":"product","description":"Internal inventory catalog with wholesale costs, reorder levels, and tracking rules (staff only)"},
+    "/public_products/{productId}":{"schema":"publicProduct","description":"Public customer storefront catalog projection omitting sensitive internal margins and suppliers"},
+    "/customers/{customerId}":{"schema":"customer","description":"Store registered customers, loyalty points, and profiles"},
+    "/staff/{staffId}":{"schema":"staff","description":"Store authenticated staff accounts, roles, and status (no credentials)"},
+    "/staff_credentials/{staffId}":{"schema":"staffCredentials","description":"Segregated credential store for staff PINs and secrets (client reads prohibited)"},
+    "/orders/{orderId}":{"schema":"order","description":"Store point of sale and eCommerce sales orders and invoices"},
+    "/audit_logs/{logId}":{"schema":"auditLog","description":"Immutable security and activity audit records"},
+    "/settings/{settingId}":{"schema":"settings","description":"Global enterprise POS system and currency configuration (internal staff only)"},
+    "/public_settings/{settingId}":{"schema":"publicSettings","description":"Public storefront-safe settings projection omitting confidential configurations"},
+    "/shift_reports/{shiftId}":{"schema":"shiftReport","description":"Store POS cash drawer float reconciliation and shift closeout ledger records"}
   }
 }
