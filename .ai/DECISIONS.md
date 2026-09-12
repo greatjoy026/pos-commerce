@@ -270,6 +270,34 @@ This register records foundational architectural decisions for `greatjoy026/pos-
   - Zero tolerance for corrupted serial or batch inventory states.
   - Ready for subsequent inventory movement and ledgering phases without architectural debt.
 
+---
+
+### ADR-018: Authoritative Inventory Movements & Immutable Transaction Ledger (INV-002)
+
+* **Status**: `IMPLEMENTED (INV-002)`
+* **Context**: `INV-001` established `InventoryRecord` as the authoritative current stock state, but did not define the immutable ledger mechanism recording *why* stock changed over time (purchases, sales, returns, adjustments, transfers).
+* **Decision**:
+  1. **Authoritative Ledger Architecture**:
+     - `InventoryRecord` holds current state (`quantityOnHand`, `quantityReserved`).
+     - `InventoryMovementRecord` (`inventory_movements` collection) is the immutable, append-only ledger record explaining balance changes.
+     - Legacy `Product.stock` is strictly a read-only compatibility projection.
+  2. **Movement Types & Semantics**:
+     - `PURCHASE_RECEIPT`: Increases `quantityOnHand` (`quantityDelta > 0`).
+     - `SALE`: Decreases `quantityOnHand` (`quantityDelta < 0`). Rejects request if sale exceeds available quantity (`quantityOnHand - quantityReserved`).
+     - `RETURN`: Increases `quantityOnHand` (`quantityDelta > 0`).
+     - `ADJUSTMENT`: Supports both positive and negative `quantityDelta` (`!= 0`). Strictly requires a non-empty `reason`.
+     - `TRANSFER`: Two linked movements (`quantityDelta < 0` at source location, `quantityDelta > 0` at destination location) with shared `referenceId`.
+  3. **Atomic Firestore Transactions**:
+     - All movements execute inside `runTransaction` (`src/services/inventoryService.ts`) enforcing `Read Inventory -> Validate -> Calculate Outcome -> Write Inventory -> Write Movement`.
+  4. **Strict Security Rules & Immutability**:
+     - `firestore.rules` enforces `allow create: if isStaff() && isValidInventoryMovement(request.resource.data);`.
+     - `allow update, delete: if false;` enforces strict append-only ledger immutability.
+     - Enforces invariant math rule: `quantityAfter == quantityBefore + quantityDelta`.
+* **Consequences**:
+  - Inventory balance changes are 100% accountable and audit-trailed.
+  - Race conditions during concurrent sales or receipts are prevented by atomic database transactions.
+  - Ledger items can never be tampered with, edited, or deleted once recorded.
+
 
 
 

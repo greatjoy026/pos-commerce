@@ -2,8 +2,10 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowRightLeft,
   ArrowUpDown,
   Barcode,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -13,9 +15,11 @@ import {
   FileText,
   Filter,
   FolderTree,
+  Layers,
   LayoutGrid,
   List,
   MapPin,
+  MoreHorizontal,
   Package,
   Plus,
   Search,
@@ -36,6 +40,7 @@ import { CategoryHierarchyManagerModal } from './CategoryHierarchyManagerModal';
 import { getChildCategoryIds } from '../utils/categoryUtils';
 import { mapExtractedDataToProduct } from '../services/aiPhotoExtractor';
 import { useCurrency } from '../context/CurrencyContext';
+import { getProductLocations, getProductLocationStock } from '../utils/locationUtils';
 
 type SortField = 'name' | 'stock' | 'price' | 'sales' | 'margin' | 'sku';
 type SortDirection = 'asc' | 'desc';
@@ -364,91 +369,199 @@ function ReasonDialog({
 
 function TransferDialog({
   open,
+  product,
   locations,
   onSubmit,
   onCancel,
 }: {
   open: boolean;
+  product?: Product | null;
   locations: Array<{ id: string; name: string }>;
-  onSubmit: (toLocationId: string, quantity: number, reason: string, reference?: string) => void;
+  onSubmit: (fromLocationId: string, toLocationId: string, quantity: number, reason: string, reference?: string) => void;
   onCancel: () => void;
 }) {
-  const [toLocationId, setToLocationId] = useState(locations[0]?.id ?? '');
+  const currentLocations = useMemo(() => (product ? getProductLocations(product) : []), [product]);
+  const locationStockList = useMemo(() => (product ? getProductLocationStock(product) : []), [product]);
+
+  const [fromLocationId, setFromLocationId] = useState('');
+  const [toLocationId, setToLocationId] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState('');
   const [reference, setReference] = useState('');
 
-  if (!open) return null;
+  // Synchronize default from and to locations when a product is opened
+  React.useEffect(() => {
+    if (product) {
+      const locs = getProductLocations(product);
+      const defaultFrom = locs[0] || locations[0]?.name || '';
+      setFromLocationId(defaultFrom);
+
+      // Find a destination different from origin
+      const otherLocation = locations.find(l => l.name.toLowerCase() !== defaultFrom.toLowerCase());
+      setToLocationId(otherLocation ? otherLocation.name : (locations[0]?.name ?? ''));
+      setQuantity(1);
+      setReason('');
+      setReference('');
+    }
+  }, [product, locations]);
+
+  if (!open || !product) return null;
+
+  const currentSourceStock = locationStockList.find(
+    s => s.location.toLowerCase() === fromLocationId.toLowerCase()
+  )?.stock ?? product.stock;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-in fade-in duration-150">
       <form
         onSubmit={event => {
           event.preventDefault();
-          if (!toLocationId || quantity <= 0 || !reason.trim()) return;
-          onSubmit(toLocationId, quantity, reason.trim(), reference.trim() || undefined);
+          if (!fromLocationId || !toLocationId || quantity <= 0 || !reason.trim()) return;
+          onSubmit(fromLocationId, toLocationId, quantity, reason.trim(), reference.trim() || undefined);
         }}
-        className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl"
+        className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl border border-slate-200 space-y-4"
       >
-        <h3 className="text-base font-bold text-slate-900">Transfer stock</h3>
-        <p className="mt-1 text-xs text-slate-500">
-          A transfer creates paired OUT/IN ledger transactions. It does not simply change a product location.
-        </p>
-
-        <label className="mt-4 block text-xs font-bold text-slate-700">
-          Destination
-          <select
-            value={toLocationId}
-            onChange={event => setToLocationId(event.target.value)}
-            className="mt-1 w-full rounded-xl border border-slate-200 p-2.5 text-sm"
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-bold text-slate-900">Transfer Inventory</h3>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Relocate stock between facilities or display zones with auditable ledger tracking.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
           >
-            {locations.map(location => (
-              <option key={location.id} value={location.id}>
-                {location.name}
-              </option>
-            ))}
-          </select>
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Product Snapshot */}
+        <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 border border-slate-200/80">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
+            {product.imageUrl ? (
+              <img src={product.imageUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <Package className="h-5 w-5 text-slate-400" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h4 className="truncate text-xs font-bold text-slate-900">{product.name}</h4>
+            <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[11px] text-slate-500">
+              <span className="font-mono font-semibold">{product.sku}</span>
+              <span>•</span>
+              <span>Total On-Hand: <strong className="text-slate-800">{product.stock}</strong></span>
+            </div>
+          </div>
+        </div>
+
+        {/* Source and Destination Pickers */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="block text-xs font-bold text-slate-700">
+            Source Location
+            <select
+              value={fromLocationId}
+              onChange={event => setFromLocationId(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500"
+            >
+              {locations.map(loc => {
+                const stockAtLoc = locationStockList.find(s => s.location.toLowerCase() === loc.name.toLowerCase())?.stock;
+                return (
+                  <option key={loc.id} value={loc.name}>
+                    {loc.name} {stockAtLoc !== undefined ? `(${stockAtLoc} pcs)` : ''}
+                  </option>
+                );
+              })}
+            </select>
+            <span className="mt-1 block text-[10px] text-slate-500">
+              Available: <strong>{currentSourceStock}</strong> unit(s)
+            </span>
+          </label>
+
+          <label className="block text-xs font-bold text-slate-700">
+            Destination Facility
+            <select
+              value={toLocationId}
+              onChange={event => setToLocationId(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500"
+            >
+              {locations.map(loc => (
+                <option key={loc.id} value={loc.name} disabled={loc.name.toLowerCase() === fromLocationId.toLowerCase()}>
+                  {loc.name} {loc.name.toLowerCase() === fromLocationId.toLowerCase() ? '(Source)' : ''}
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-[10px] text-slate-500">
+              Target destination
+            </span>
+          </label>
+        </div>
+
+        {/* Quantity */}
+        <label className="block text-xs font-bold text-slate-700">
+          Transfer Quantity
+          <div className="relative mt-1">
+            <input
+              type="number"
+              min={1}
+              max={Math.max(1, currentSourceStock)}
+              step={1}
+              value={quantity}
+              onChange={event => setQuantity(Math.max(1, Number(event.target.value)))}
+              className="w-full rounded-xl border border-slate-200 p-2.5 text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500"
+            />
+            {currentSourceStock > 1 && (
+              <button
+                type="button"
+                onClick={() => setQuantity(currentSourceStock)}
+                className="absolute right-2 top-2 rounded bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-100"
+              >
+                All ({currentSourceStock})
+              </button>
+            )}
+          </div>
         </label>
 
-        <label className="mt-3 block text-xs font-bold text-slate-700">
-          Quantity
-          <input
-            type="number"
-            min={1}
-            step={1}
-            value={quantity}
-            onChange={event => setQuantity(Number(event.target.value))}
-            className="mt-1 w-full rounded-xl border border-slate-200 p-2.5 text-sm"
-          />
-        </label>
+        {/* Reason and Reference */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="block text-xs font-bold text-slate-700">
+            Reason *
+            <input
+              required
+              value={reason}
+              onChange={event => setReason(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-200 p-2 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500"
+              placeholder="e.g. Retail floor replenishment"
+            />
+          </label>
 
-        <label className="mt-3 block text-xs font-bold text-slate-700">
-          Reason
-          <input
-            required
-            value={reason}
-            onChange={event => setReason(event.target.value)}
-            className="mt-1 w-full rounded-xl border border-slate-200 p-2.5 text-sm"
-            placeholder="Store replenishment"
-          />
-        </label>
+          <label className="block text-xs font-bold text-slate-700">
+            Reference / Memo
+            <input
+              value={reference}
+              onChange={event => setReference(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-200 p-2 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500"
+              placeholder="TRF-2026-001"
+            />
+          </label>
+        </div>
 
-        <label className="mt-3 block text-xs font-bold text-slate-700">
-          Reference
-          <input
-            value={reference}
-            onChange={event => setReference(event.target.value)}
-            className="mt-1 w-full rounded-xl border border-slate-200 p-2.5 text-sm"
-            placeholder="TRF-2026-001"
-          />
-        </label>
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={onCancel} className="rounded-xl border px-4 py-2 text-sm font-semibold">
+        <div className="mt-4 flex justify-end gap-2 pt-2 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          >
             Cancel
           </button>
-          <button type="submit" className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white">
-            Transfer
+          <button
+            type="submit"
+            disabled={!fromLocationId || !toLocationId || fromLocationId.toLowerCase() === toLocationId.toLowerCase() || quantity <= 0}
+            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+          >
+            <ArrowRightLeft className="h-3.5 w-3.5" />
+            <span>Confirm Transfer</span>
           </button>
         </div>
       </form>
@@ -508,6 +621,23 @@ export default function InventoryModule({
 
   const [transferDialog, setTransferDialog] = useState<Product | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<string[] | null>(null);
+  const [activeActionMenuId, setActiveActionMenuId] = useState<string | null>(null);
+  const [locationPopoverProductId, setLocationPopoverProductId] = useState<string | null>(null);
+
+  // Derive dynamic list of all distinct inventory locations from products and defaults
+  const effectiveLocations = useMemo(() => {
+    const map = new Map<string, string>();
+    locations.forEach(loc => map.set(loc.name.toLowerCase(), loc.name));
+    products.forEach(p => {
+      getProductLocations(p).forEach(locName => {
+        if (locName) map.set(locName.toLowerCase(), locName);
+      });
+    });
+    return Array.from(map.values()).map(name => ({
+      id: name.toLowerCase().replace(/\s+/g, '-'),
+      name,
+    }));
+  }, [locations, products]);
 
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -588,9 +718,10 @@ export default function InventoryModule({
           !categoryMatches || categoryMatches.has(categoryValue) ||
           categoryMatches.has(String(product.category ?? '').toLowerCase());
 
+        const productLocations = getProductLocations(product);
         const matchesLocation =
           selectedLocation === 'All' ||
-          normalizeCode(product.location) === normalizeCode(selectedLocation);
+          productLocations.some(loc => normalizeCode(loc) === normalizeCode(selectedLocation));
 
         const matchesStatus =
           stockStatusFilter === 'all' ||
@@ -732,7 +863,8 @@ export default function InventoryModule({
 
   const handleTransfer = async (
     product: Product,
-    toLocationId: string,
+    fromLocationNameOrId: string,
+    toLocationNameOrId: string,
     quantity: number,
     reason: string,
     reference?: string
@@ -742,9 +874,11 @@ export default function InventoryModule({
       return;
     }
 
-    const fromLocationId = String(product.location ?? '');
-    if (!fromLocationId || fromLocationId === toLocationId) {
-      setError('Choose a destination different from the current location.');
+    const fromLocName = effectiveLocations.find(l => l.id === fromLocationNameOrId || l.name.toLowerCase() === fromLocationNameOrId.toLowerCase())?.name ?? fromLocationNameOrId;
+    const toLocName = effectiveLocations.find(l => l.id === toLocationNameOrId || l.name.toLowerCase() === toLocationNameOrId.toLowerCase())?.name ?? toLocationNameOrId;
+
+    if (!fromLocName || !toLocName || fromLocName.toLowerCase() === toLocName.toLowerCase()) {
+      setError('Choose a destination different from the origin location.');
       return;
     }
 
@@ -752,23 +886,49 @@ export default function InventoryModule({
       if (inventoryService) {
         return inventoryService.transferStock({
           productId: product.id,
-          fromLocationId,
-          toLocationId,
+          fromLocationId: fromLocName,
+          toLocationId: toLocName,
           quantity,
           reason,
           reference,
         });
       }
 
-      // Legacy fallback. Do not use for real multi-location inventory.
+      // Multi-location inventory distribution calculation
+      const currentLocStock = getProductLocationStock(product);
+      let foundSource = false;
+      const updatedLocStock = currentLocStock.map(item => {
+        if (item.location.toLowerCase() === fromLocName.toLowerCase()) {
+          foundSource = true;
+          return { ...item, stock: Math.max(0, item.stock - quantity) };
+        }
+        return item;
+      });
+
+      if (!foundSource) {
+        updatedLocStock.push({ location: fromLocName, stock: Math.max(0, product.stock - quantity) });
+      }
+
+      const destIndex = updatedLocStock.findIndex(item => item.location.toLowerCase() === toLocName.toLowerCase());
+      if (destIndex >= 0) {
+        updatedLocStock[destIndex].stock += quantity;
+      } else {
+        updatedLocStock.push({ location: toLocName, stock: quantity });
+      }
+
+      const currentLocs = getProductLocations(product);
+      const updatedLocations = Array.from(new Set([...currentLocs, toLocName]));
+
       await onUpdateProduct({
         ...product,
-        location: (locations.find(location => location.id === toLocationId)?.name ?? toLocationId) as Product['location'],
+        locations: updatedLocations,
+        locationStock: updatedLocStock,
+        location: updatedLocations.join(', ') as Product['location'],
       });
       return { success: true };
     });
 
-    if (ok) setSuccess(`Transfer request for ${quantity} unit(s) submitted.`);
+    if (ok) setSuccess(`Transferred ${quantity} unit(s) of ${product.name} from ${fromLocName} to ${toLocName}.`);
   };
 
   const handleBulkAdjust = async (amount: number) => {
@@ -1278,23 +1438,35 @@ export default function InventoryModule({
         </section>
       )}
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+      <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm sm:p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <div className="relative min-w-0 flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
               value={searchTerm}
               onChange={event => setSearchTerm(event.target.value)}
-              placeholder="Search product, SKU, barcode or variant..."
-              className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="Search product, SKU, barcode, category or variant..."
+              className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-slate-50/50 py-2.5 pl-10 pr-10 text-sm outline-none transition focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100"
             />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+                title="Clear search"
+                aria-label="Clear search"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:flex lg:flex-wrap lg:items-center">
             <select
               value={selectedCategory}
               onChange={event => setSelectedCategory(event.target.value)}
-              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold"
+              className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 lg:w-auto"
+              aria-label="Filter by category"
             >
               {categoryOptions.map(category => (
                 <option key={category} value={category}>
@@ -1306,10 +1478,11 @@ export default function InventoryModule({
             <select
               value={selectedLocation}
               onChange={event => setSelectedLocation(event.target.value)}
-              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold"
+              className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 lg:w-auto"
+              aria-label="Filter by location"
             >
               <option value="All">All Locations</option>
-              {locations.map(location => (
+              {effectiveLocations.map(location => (
                 <option key={location.id} value={location.name}>
                   {location.name}
                 </option>
@@ -1319,80 +1492,135 @@ export default function InventoryModule({
             <select
               value={stockStatusFilter}
               onChange={event => setStockStatusFilter(event.target.value as StockStatusFilter)}
-              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold"
+              className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 lg:w-auto"
+              aria-label="Filter by stock health"
             >
-              <option value="all">All Stock</option>
-              <option value="healthy">Healthy</option>
-              <option value="low">Low Stock</option>
+              <option value="all">All Stock Status</option>
+              <option value="healthy">Healthy Stock</option>
+              <option value="low">Low Stock Alert</option>
               <option value="out">Out of Stock</option>
             </select>
 
-            <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50">
+            <div className="flex min-h-[44px] items-center rounded-xl border border-slate-200 bg-slate-50">
               <select
                 value={sortBy}
                 onChange={event => setSortBy(event.target.value as SortField)}
-                className="bg-transparent px-2 py-2 text-xs font-semibold outline-none"
+                className="min-h-[44px] flex-1 bg-transparent px-2.5 py-2 text-xs font-semibold text-slate-700 outline-none"
+                aria-label="Sort inventory by"
               >
-                <option value="stock">Stock</option>
-                <option value="name">Name</option>
-                <option value="sku">SKU</option>
-                <option value="price">Price</option>
-                <option value="sales">Sales</option>
-                <option value="margin">Margin</option>
+                <option value="stock">Sort: Stock</option>
+                <option value="name">Sort: Name</option>
+                <option value="sku">Sort: SKU</option>
+                <option value="price">Sort: Price</option>
+                <option value="sales">Sort: Sales</option>
+                <option value="margin">Sort: Margin</option>
               </select>
               <button
                 type="button"
                 onClick={() => setSortDir(value => (value === 'asc' ? 'desc' : 'asc'))}
-                className="p-2"
-                title="Toggle sort direction"
+                className="flex min-h-[44px] min-w-[40px] items-center justify-center border-l border-slate-200 p-2 text-slate-500 hover:text-slate-800"
+                title={`Sort ${sortDir === 'asc' ? 'Ascending (click for Descending)' : 'Descending (click for Ascending)'}`}
+                aria-label="Toggle sort direction"
               >
-                <ArrowUpDown className="h-3.5 w-3.5" />
+                <ArrowUpDown className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="flex rounded-xl bg-slate-100 p-0.5">
-              <button
-                type="button"
-                onClick={() => setViewMode('table')}
-                className={`rounded-lg p-2 ${viewMode === 'table' ? 'bg-white shadow-sm' : ''}`}
-                title="Table"
-              >
-                <List className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('cards')}
-                className={`rounded-lg p-2 ${viewMode === 'cards' ? 'bg-white shadow-sm' : ''}`}
-                title="Cards"
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </button>
-            </div>
+            <div className="col-span-2 flex items-center justify-between gap-2 sm:col-span-4 lg:col-span-1">
+              <div className="flex rounded-xl bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('table')}
+                  className={`flex min-h-[38px] items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+                    viewMode === 'table'
+                      ? 'bg-white text-indigo-700 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Table View"
+                >
+                  <List className="h-4 w-4" />
+                  <span className="sm:inline">Table</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('cards')}
+                  className={`flex min-h-[38px] items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+                    viewMode === 'cards'
+                      ? 'bg-white text-indigo-700 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Grid Cards View"
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                  <span className="sm:inline">Cards</span>
+                </button>
+              </div>
 
-            {canManageCategories && (
+              {canManageCategories && (
+                <button
+                  type="button"
+                  onClick={() => setIsCategoryManagerOpen(true)}
+                  className="flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  <FolderTree className="h-4 w-4 text-indigo-600" />
+                  <span className="whitespace-nowrap">Categories</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Results summary bar with quick reset */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-xs text-slate-500">
+          <div className="flex items-center gap-2">
+            <span>
+              Showing <strong className="font-semibold text-slate-800">{filteredProducts.length}</strong> of{' '}
+              <strong className="font-semibold text-slate-800">{products.length}</strong> items
+            </span>
+            {(searchTerm ||
+              selectedCategory !== 'All' ||
+              selectedLocation !== 'All' ||
+              stockStatusFilter !== 'all') && (
               <button
                 type="button"
-                onClick={() => setIsCategoryManagerOpen(true)}
-                className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold"
+                onClick={() => {
+                  setSearchTerm('');
+                  setSelectedCategory('All');
+                  setSelectedLocation('All');
+                  setStockStatusFilter('all');
+                }}
+                className="font-semibold text-indigo-600 hover:underline"
               >
-                <FolderTree className="h-4 w-4" />
-                Categories
+                Reset filters
               </button>
             )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={toggleSelectAll}
+              className="font-semibold text-slate-600 hover:text-slate-900"
+            >
+              {filteredProducts.length > 0 &&
+              filteredProducts.every(product => selectedProductIds.includes(product.id))
+                ? 'Deselect all'
+                : 'Select all on page'}
+            </button>
           </div>
         </div>
       </section>
 
       {selectedProductIds.length > 0 && (
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-900 p-3 text-white shadow-xl">
-          <div className="flex items-center gap-2">
-            <span className="rounded-lg bg-indigo-600 px-2.5 py-1 font-mono text-xs font-bold">
-              {selectedProductIds.length} selected
+        <section className="flex flex-col gap-3 rounded-2xl bg-slate-900 p-4 text-white shadow-xl sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-7 min-w-[28px] items-center justify-center rounded-lg bg-indigo-600 px-2 font-mono text-xs font-bold">
+              {selectedProductIds.length}
             </span>
-            <span className="text-xs text-slate-300">Batch inventory operations</span>
+            <span className="text-xs font-medium text-slate-300">Selected for batch actions</span>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {canReorder &&
               [10, 25, 50].map(amount => (
                 <button
@@ -1400,7 +1628,7 @@ export default function InventoryModule({
                   type="button"
                   disabled={busy}
                   onClick={() => handleBulkAdjust(amount)}
-                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold hover:bg-indigo-500 disabled:opacity-50"
+                  className="flex min-h-[40px] items-center rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50"
                 >
                   Restock +{amount}
                 </button>
@@ -1411,7 +1639,7 @@ export default function InventoryModule({
                 type="button"
                 disabled={busy}
                 onClick={handleDeleteSelected}
-                className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-bold disabled:opacity-50"
+                className="flex min-h-[40px] items-center rounded-xl bg-rose-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-rose-500 disabled:opacity-50"
               >
                 Delete
               </button>
@@ -1420,9 +1648,9 @@ export default function InventoryModule({
             <button
               type="button"
               onClick={() => setSelectedProductIds([])}
-              className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold"
+              className="flex min-h-[40px] items-center rounded-xl bg-white/15 px-3.5 py-2 text-xs font-semibold text-white hover:bg-white/20"
             >
-              Clear
+              Clear selection
             </button>
           </div>
         </section>
@@ -1430,12 +1658,17 @@ export default function InventoryModule({
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         {loading ? (
-          <div className="p-12 text-center text-sm text-slate-500">Loading inventory...</div>
+          <div className="p-12 text-center text-sm text-slate-500">
+            <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+            Loading inventory catalog...
+          </div>
         ) : filteredProducts.length === 0 ? (
           <div className="p-12 text-center">
             <Package className="mx-auto h-12 w-12 text-slate-300" />
-            <h3 className="mt-3 font-bold text-slate-800">No matching products</h3>
-            <p className="mt-1 text-sm text-slate-500">Clear filters or search for another SKU.</p>
+            <h3 className="mt-3 font-bold text-slate-800">No matching products found</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Try adjusting your search criteria, category filters, or location filters.
+            </p>
             <button
               type="button"
               onClick={() => {
@@ -1444,287 +1677,1024 @@ export default function InventoryModule({
                 setSelectedLocation('All');
                 setStockStatusFilter('all');
               }}
-              className="mt-4 rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white"
+              className="mt-4 inline-flex min-h-[44px] items-center rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
             >
-              Reset filters
+              Reset all filters
             </button>
           </div>
         ) : viewMode === 'table' ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left text-xs">
-              <thead className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
-                <tr>
-                  <th className="w-10 px-3 py-3">
-                    <input
-                      type="checkbox"
-                      checked={
-                        filteredProducts.length > 0 &&
-                        filteredProducts.every(product => selectedProductIds.includes(product.id))
-                      }
-                      onChange={toggleSelectAll}
-                    />
-                  </th>
-                  <th className="px-3 py-3">Product</th>
-                  <th className="px-3 py-3">SKU</th>
-                  <th className="px-3 py-3">Location</th>
-                  <th className="px-3 py-3 text-right">Stock</th>
-                  <th className="px-3 py-3 text-right">Price</th>
-                  <th className="px-3 py-3">Status</th>
-                  <th className="px-3 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
+          <div>
+            {/* Mobile-First Responsive Card-List for small screens (< md) */}
+            <div className="divide-y divide-slate-100 md:hidden">
+              {filteredProducts.map(product => {
+                const expanded = !!expandedProductIds[product.id];
+                const isSelected = selectedProductIds.includes(product.id);
+                const status =
+                  product.stock <= 0
+                    ? 'out'
+                    : product.stock <= product.reorderPoint
+                      ? 'low'
+                      : 'healthy';
 
-              <tbody className="divide-y divide-slate-100">
-                {filteredProducts.map(product => {
-                  const expanded = !!expandedProductIds[product.id];
-                  const status =
-                    product.stock <= 0
-                      ? 'out'
-                      : product.stock <= product.reorderPoint
-                        ? 'low'
-                        : 'healthy';
+                return (
+                  <article
+                    key={product.id}
+                    id={`row-${product.id}`}
+                    className={`p-4 transition-colors ${
+                      isSelected ? 'bg-indigo-50/30 ring-1 ring-inset ring-indigo-500/20' : 'hover:bg-slate-50/60'
+                    }`}
+                  >
+                    {/* Header Row: Checkbox + Image + Title & Meta + Status Badge */}
+                    <div className="flex items-start gap-3">
+                      <label className="flex min-h-[44px] min-w-[44px] cursor-pointer items-center justify-center -ml-2 -mt-1">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelection(product.id)}
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </label>
 
-                  return (
-                    <React.Fragment key={product.id}>
-                      <tr
-                        id={`row-${product.id}`}
-                        className="hover:bg-slate-50"
-                      >
-                        <td className="px-3 py-3">
-                          <input
-                            type="checkbox"
-                            checked={selectedProductIds.includes(product.id)}
-                            onChange={() => toggleSelection(product.id)}
-                          />
-                        </td>
+                      <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200/60 bg-slate-100">
+                        {product.imageUrl ? (
+                          <img src={product.imageUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <Package className="h-5 w-5 text-slate-400" />
+                        )}
+                      </div>
 
-                        <td className="px-3 py-3">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100">
-                              {product.imageUrl ? (
-                                <img src={product.imageUrl} alt="" className="h-full w-full object-cover" />
-                              ) : (
-                                <Package className="h-5 w-5 text-slate-400" />
-                              )}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="truncate font-bold text-slate-900">{product.name}</div>
-                              <div className="truncate text-[11px] text-slate-500">{product.category}</div>
-                            </div>
-                          </div>
-                        </td>
-
-                        <td className="px-3 py-3 font-mono font-semibold text-slate-700">{product.sku}</td>
-
-                        <td className="px-3 py-3">
-                          <span className="inline-flex items-center gap-1 text-slate-600">
-                            <MapPin className="h-3.5 w-3.5" />
-                            {product.location}
-                          </span>
-                        </td>
-
-                        <td className="px-3 py-3 text-right">
-                          <span className="font-mono font-bold text-slate-900">{product.stock.toLocaleString()}</span>
-                          <span className="ml-1 text-slate-400">/ {product.reorderPoint}</span>
-                        </td>
-
-                        <td className="px-3 py-3 text-right font-semibold">{formatAmount(product.price)}</td>
-
-                        <td className="px-3 py-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <h3 className="line-clamp-2 text-sm font-bold leading-snug text-slate-900">
+                            {product.name}
+                          </h3>
                           <span
-                            className={`rounded-full px-2 py-1 text-[10px] font-bold ${
+                            className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold ${
                               status === 'out'
-                                ? 'bg-rose-50 text-rose-700'
+                                ? 'border-rose-200 bg-rose-50 text-rose-700'
                                 : status === 'low'
-                                  ? 'bg-amber-50 text-amber-700'
-                                  : 'bg-emerald-50 text-emerald-700'
+                                  ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
                             }`}
                           >
                             {status === 'out' ? 'OUT' : status === 'low' ? 'LOW' : 'HEALTHY'}
                           </span>
-                        </td>
+                        </div>
 
-                        <td className="px-3 py-3">
-                          <div className="flex justify-end gap-1">
-                            {product.variants?.length ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                          <span className="font-semibold text-slate-600">{product.category}</span>
+                          <span>•</span>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
+                            {product.sku}
+                          </span>
+                          {getProductLocations(product).length > 0 && (
+                            <>
+                              <span>•</span>
+                              <span className="inline-flex items-center gap-1 text-[11px] text-slate-600">
+                                <MapPin className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span>{getProductLocations(product).join(', ')}</span>
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Compact Metrics Grid */}
+                    <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-slate-100 bg-slate-50 p-2.5">
+                      <div>
+                        <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          Stock On Hand
+                        </span>
+                        <div className="mt-0.5 flex items-baseline gap-1.5">
+                          <span className="font-mono text-base font-bold text-slate-900">
+                            {product.stock.toLocaleString()}
+                          </span>
+                          <span className="text-xs font-medium text-slate-400">
+                            / {product.reorderPoint} min
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          Retail Price
+                        </span>
+                        <div className="mt-0.5 text-base font-bold text-slate-900">
+                          {formatAmount(product.price)}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Expandable Variants Accordion (Mobile) */}
+                    {product.variants && product.variants.length > 0 && (
+                      <div className="mt-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedProductIds(current => ({
+                              ...current,
+                              [product.id]: !current[product.id],
+                            }))
+                          }
+                          className="flex min-h-[40px] w-full items-center justify-between rounded-xl border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <Layers className="h-4 w-4 text-indigo-600" />
+                            {product.variants.length} {product.variants.length === 1 ? 'Variant' : 'Variants'}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span>{expanded ? 'Hide' : 'Show details'}</span>
+                            {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                          </span>
+                        </button>
+
+                        {expanded && (
+                          <div className="mt-2 space-y-1.5 border-l-2 border-indigo-200 pl-2">
+                            {product.variants.map(variant => {
+                              const variantName =
+                                [variant.color, variant.size, variant.model, variant.optionName]
+                                  .filter(Boolean)
+                                  .join(' • ') || 'Variant item';
+                              return (
+                                <div
+                                  key={variant.id || variant.sku}
+                                  className="flex items-center justify-between rounded-lg bg-slate-50 p-2 text-xs"
+                                >
+                                  <div className="min-w-0 pr-2">
+                                    <div className="truncate font-semibold text-slate-800">{variantName}</div>
+                                    <div className="font-mono text-[11px] text-slate-500">{variant.sku}</div>
+                                  </div>
+                                  <div className="text-right font-mono">
+                                    <span className="font-bold text-slate-900">{variant.stock}</span>
+                                    <span className="ml-1 text-[10px] text-slate-400">units</span>
+                                    {variant.retailPrice !== undefined && (
+                                      <div className="text-[11px] font-semibold text-slate-600">
+                                        {formatAmount(variant.retailPrice)}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Touch-First Mobile Action Toolbar (min-h-[44px]) */}
+                    <div className="mt-3 flex flex-wrap items-center gap-2 pt-1">
+                      {canAdjust && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setReasonDialog({ product, quantity: 10 })}
+                          className="flex min-h-[44px] flex-1 min-w-[100px] items-center justify-center rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+                        >
+                          +10 Restock
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDetailProduct(product);
+                          setIsDetailModalOpen(true);
+                        }}
+                        className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-slate-100 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                      >
+                        <Eye className="h-4 w-4" />
+                        <span>Details</span>
+                      </button>
+
+                      {canTransfer && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setTransferDialog(product)}
+                          className="flex min-h-[44px] items-center justify-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                          title="Transfer location"
+                        >
+                          <ArrowRightLeft className="h-3.5 w-3.5" />
+                          <span>Move</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => openBarcode(product)}
+                        className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        title="Barcode"
+                        aria-label="View or print barcode"
+                      >
+                        <Barcode className="h-4 w-4" />
+                      </button>
+
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => openEdit(product)}
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          title="Edit product"
+                          aria-label="Edit product"
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </button>
+                      )}
+
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={() => setDeleteDialog([product.id])}
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100"
+                          title="Delete product"
+                          aria-label="Delete product"
+                        >
+                          <Trash className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            {/* Desktop Responsive Table (md:block) */}
+            <div className="hidden md:block overflow-x-auto relative">
+              {(activeActionMenuId || locationPopoverProductId) && (
+                <div
+                  className="fixed inset-0 z-20 cursor-default"
+                  onClick={() => {
+                    setActiveActionMenuId(null);
+                    setLocationPopoverProductId(null);
+                  }}
+                />
+              )}
+              <table className="w-full text-left text-xs">
+                <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur-sm text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                  <tr>
+                    <th className="w-10 px-2.5 lg:px-3 py-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={
+                          filteredProducts.length > 0 &&
+                          filteredProducts.every(product => selectedProductIds.includes(product.id))
+                        }
+                        onChange={toggleSelectAll}
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </th>
+                    <th className="px-2.5 lg:px-3 py-3 font-bold">Product</th>
+                    <th className="px-2.5 lg:px-3 py-3 font-bold whitespace-nowrap">SKU</th>
+                    <th className="px-2.5 lg:px-3 py-3 font-bold whitespace-nowrap">Location(s)</th>
+                    <th className="px-2.5 lg:px-3 py-3 text-right font-bold whitespace-nowrap">Stock Level</th>
+                    <th className="px-2.5 lg:px-3 py-3 text-right font-bold whitespace-nowrap">Unit Price</th>
+                    <th className="px-2.5 lg:px-3 py-3 text-center font-bold whitespace-nowrap">Status</th>
+                    <th className="px-2.5 lg:px-3 py-3 text-right font-bold whitespace-nowrap">Actions</th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-slate-100">
+                  {filteredProducts.map(product => {
+                    const expanded = !!expandedProductIds[product.id];
+                    const isSelected = selectedProductIds.includes(product.id);
+                    const status =
+                      product.stock <= 0
+                        ? 'out'
+                        : product.stock <= product.reorderPoint
+                          ? 'low'
+                          : 'healthy';
+                    const productLocations = getProductLocations(product);
+                    const locStock = getProductLocationStock(product);
+
+                    return (
+                      <React.Fragment key={product.id}>
+                        <tr
+                          id={`row-${product.id}`}
+                          className={`transition-colors ${
+                            isSelected ? 'bg-indigo-50/50 hover:bg-indigo-50/70' : 'hover:bg-slate-50/80'
+                          }`}
+                        >
+                          <td className="px-2.5 lg:px-3 py-2.5 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelection(product.id)}
+                              className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                          </td>
+
+                          <td className="px-2.5 lg:px-3 py-2.5">
+                            <div className="flex items-center gap-2.5 min-w-0">
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setExpandedProductIds(current => ({
-                                    ...current,
-                                    [product.id]: !current[product.id],
-                                  }))
-                                }
-                                className="rounded-lg bg-slate-100 p-2"
-                                title="Variants"
+                                onClick={() => {
+                                  setDetailProduct(product);
+                                  setIsDetailModalOpen(true);
+                                }}
+                                className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200/60 bg-slate-100 hover:border-indigo-300 transition-colors"
+                                title="View details"
                               >
-                                {expanded ? (
-                                  <ChevronUp className="h-4 w-4" />
+                                {product.imageUrl ? (
+                                  <img src={product.imageUrl} alt="" className="h-full w-full object-cover" />
                                 ) : (
-                                  <ChevronDown className="h-4 w-4" />
+                                  <Package className="h-4 w-4 text-slate-400" />
                                 )}
                               </button>
-                            ) : null}
+                              <div className="min-w-0 flex-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDetailProduct(product);
+                                    setIsDetailModalOpen(true);
+                                  }}
+                                  className="truncate font-bold text-slate-900 hover:text-indigo-600 transition-colors text-left block max-w-full"
+                                  title="View details"
+                                >
+                                  {product.name}
+                                </button>
+                                <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                                  <span className="truncate max-w-[120px]">{product.category}</span>
+                                  {product.variants && product.variants.length > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setExpandedProductIds(current => ({
+                                          ...current,
+                                          [product.id]: !current[product.id],
+                                        }))
+                                      }
+                                      className="inline-flex items-center gap-0.5 rounded bg-indigo-50 px-1.5 py-0.5 font-semibold text-indigo-700 hover:bg-indigo-100 shrink-0"
+                                    >
+                                      <span>{product.variants.length} var</span>
+                                      {expanded ? (
+                                        <ChevronUp className="h-3 w-3" />
+                                      ) : (
+                                        <ChevronDown className="h-3 w-3" />
+                                      )}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
 
+                          <td className="px-2.5 lg:px-3 py-2.5 whitespace-nowrap">
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
+                              {product.sku}
+                            </span>
+                          </td>
+
+                          <td className="px-2.5 lg:px-3 py-2.5 whitespace-nowrap relative">
+                            {productLocations.length <= 1 ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-700">
+                                <MapPin className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span>{productLocations[0] || 'Store Shelf'}</span>
+                              </span>
+                            ) : (
+                              <div className="inline-flex items-center gap-1">
+                                {productLocations.slice(0, 2).map(loc => {
+                                  const item = locStock.find(s => s.location.toLowerCase() === loc.toLowerCase());
+                                  return (
+                                    <span
+                                      key={loc}
+                                      className="inline-flex items-center gap-1 rounded-md bg-indigo-50/80 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 border border-indigo-200/50"
+                                      title={item ? `${loc}: ${item.stock} units` : loc}
+                                    >
+                                      <MapPin className="h-2.5 w-2.5 text-indigo-500 shrink-0" />
+                                      <span className="truncate max-w-[75px]">{loc}</span>
+                                      {item && <span className="font-mono text-indigo-950 font-bold">({item.stock})</span>}
+                                    </span>
+                                  );
+                                })}
+                                {productLocations.length > 2 && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setLocationPopoverProductId(locationPopoverProductId === product.id ? null : product.id);
+                                    }}
+                                    className="inline-flex items-center rounded-md bg-slate-100 hover:bg-slate-200 px-1 py-0.5 text-[10px] font-bold text-slate-600 transition-colors"
+                                    title={`Stored across ${productLocations.length} locations. Click to view breakdown.`}
+                                  >
+                                    +{productLocations.length - 2}
+                                  </button>
+                                )}
+
+                                {locationPopoverProductId === product.id && (
+                                  <div className="absolute left-0 top-full z-30 mt-1 min-w-[200px] rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl ring-1 ring-black/5 animate-in fade-in duration-100">
+                                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1">
+                                      <MapPin className="h-3 w-3 text-indigo-600" />
+                                      Location Distribution
+                                    </div>
+                                    <div className="space-y-1">
+                                      {locStock.map(ls => (
+                                        <div key={ls.location} className="flex items-center justify-between text-xs py-0.5">
+                                          <span className="font-medium text-slate-700">{ls.location}</span>
+                                          <span className="font-mono font-bold text-indigo-600">{ls.stock} units</span>
+                                        </div>
+                                      ))}
+                                      <div className="border-t border-slate-100 pt-1 mt-1 flex items-center justify-between text-xs font-bold text-slate-900">
+                                        <span>Total Stock</span>
+                                        <span className="font-mono">{product.stock} units</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="px-2.5 lg:px-3 py-2.5 text-right whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <span
+                                className={`inline-block h-2 w-2 rounded-full shrink-0 ${
+                                  status === 'out'
+                                    ? 'bg-rose-500'
+                                    : status === 'low'
+                                      ? 'bg-amber-500'
+                                      : 'bg-emerald-500'
+                                }`}
+                              />
+                              <span className="font-mono font-bold text-slate-900">
+                                {product.stock.toLocaleString()}
+                              </span>
+                              <span className="text-slate-400 text-[11px]">/ {product.reorderPoint}</span>
+                            </div>
+                          </td>
+
+                          <td className="px-2.5 lg:px-3 py-2.5 text-right font-bold text-slate-900 whitespace-nowrap">
+                            {formatAmount(product.price)}
+                          </td>
+
+                          <td className="px-2.5 lg:px-3 py-2.5 text-center whitespace-nowrap">
+                            <span
+                              className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                                status === 'out'
+                                  ? 'border-rose-200 bg-rose-50 text-rose-700'
+                                  : status === 'low'
+                                    ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                    : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              }`}
+                            >
+                              {status === 'out' ? 'OUT' : status === 'low' ? 'LOW' : 'HEALTHY'}
+                            </span>
+                          </td>
+
+                          <td className="px-2.5 lg:px-3 py-2.5 text-right whitespace-nowrap">
+                            <div className="relative inline-flex items-center justify-end gap-1">
+                              {product.variants?.length ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedProductIds(current => ({
+                                      ...current,
+                                      [product.id]: !current[product.id],
+                                    }))
+                                  }
+                                  className="rounded-lg bg-slate-100 p-1.5 text-slate-600 hover:bg-slate-200 transition-colors"
+                                  title={expanded ? 'Hide variants' : 'Show variants'}
+                                >
+                                  {expanded ? (
+                                    <ChevronUp className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <ChevronDown className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                              ) : null}
+
+                              {canAdjust && (
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => setReasonDialog({ product, quantity: 10 })}
+                                  className="rounded-lg bg-indigo-50 px-2 py-1 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 transition-colors"
+                                  title="Quick Restock +10"
+                                >
+                                  +10
+                                </button>
+                              )}
+
+                              {/* More Actions Dropdown */}
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveActionMenuId(activeActionMenuId === product.id ? null : product.id);
+                                  }}
+                                  className="rounded-lg bg-slate-100 p-1.5 text-slate-600 hover:bg-slate-200 transition-colors"
+                                  title="Actions"
+                                  aria-label="Actions"
+                                >
+                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                </button>
+
+                                {activeActionMenuId === product.id && (
+                                  <div className="absolute right-0 top-full z-40 mt-1 w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5 animate-in fade-in duration-100 text-left">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveActionMenuId(null);
+                                        setDetailProduct(product);
+                                        setIsDetailModalOpen(true);
+                                      }}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 text-left transition-colors"
+                                    >
+                                      <Eye className="h-3.5 w-3.5 text-slate-500" />
+                                      <span>View Details</span>
+                                    </button>
+
+                                    {canEdit && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveActionMenuId(null);
+                                          openEdit(product);
+                                        }}
+                                        className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 text-left transition-colors"
+                                      >
+                                        <Edit2 className="h-3.5 w-3.5 text-slate-500" />
+                                        <span>Edit Product</span>
+                                      </button>
+                                    )}
+
+                                    {canTransfer && (
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() => {
+                                          setActiveActionMenuId(null);
+                                          setTransferDialog(product);
+                                        }}
+                                        className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 text-left transition-colors"
+                                      >
+                                        <ArrowRightLeft className="h-3.5 w-3.5 text-indigo-600" />
+                                        <span>Transfer Stock</span>
+                                      </button>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveActionMenuId(null);
+                                        openBarcode(product);
+                                      }}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 text-left transition-colors"
+                                    >
+                                      <Barcode className="h-3.5 w-3.5 text-slate-500" />
+                                      <span>Barcode Studio</span>
+                                    </button>
+
+                                    {canDelete && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveActionMenuId(null);
+                                          setDeleteDialog([product.id]);
+                                        }}
+                                        className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 text-left transition-colors border-t border-slate-100 mt-1 pt-1.5"
+                                      >
+                                        <Trash className="h-3.5 w-3.5 text-rose-500" />
+                                        <span>Delete Product</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+
+                        {expanded &&
+                          product.variants?.map(variant => {
+                            const variantAttributes = [variant.color, variant.size, variant.model, variant.optionName]
+                              .filter(Boolean)
+                              .join(' • ');
+
+                            return (
+                              <tr key={variant.id || variant.sku} className="border-l-4 border-indigo-400 bg-slate-50/70">
+                                <td className="px-2.5 lg:px-3 py-2 text-center" />
+                                <td className="px-2.5 lg:px-3 py-2 pl-8 text-slate-700">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold">{variantAttributes || 'Variant'}</span>
+                                    {variant.isActive === false && (
+                                      <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600">
+                                        Inactive
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-2.5 lg:px-3 py-2 font-mono text-xs text-slate-600 whitespace-nowrap">{variant.sku}</td>
+                                <td className="px-2.5 lg:px-3 py-2 text-slate-500 whitespace-nowrap">{productLocations.join(', ')}</td>
+                                <td className="px-2.5 lg:px-3 py-2 text-right font-mono font-bold text-slate-800 whitespace-nowrap">
+                                  {variant.stock}
+                                </td>
+                                <td className="px-2.5 lg:px-3 py-2 text-right font-semibold text-slate-700 whitespace-nowrap">
+                                  {variant.retailPrice !== undefined ? formatAmount(variant.retailPrice) : '—'}
+                                </td>
+                                <td className="px-2.5 lg:px-3 py-2 text-center whitespace-nowrap">
+                                  <span
+                                    className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                      variant.stock <= 0
+                                        ? 'bg-rose-50 text-rose-700'
+                                        : 'bg-emerald-50 text-emerald-700'
+                                    }`}
+                                  >
+                                    {variant.stock <= 0 ? 'OUT' : 'OK'}
+                                  </span>
+                                </td>
+                                <td className="px-2.5 lg:px-3 py-2 text-right whitespace-nowrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => openBarcode(product, variant.sku)}
+                                    className="rounded p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-800 transition-colors"
+                                    title="Barcode for variant"
+                                  >
+                                    <Barcode className="h-3.5 w-3.5" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="relative p-4 sm:p-5 lg:p-6">
+            {(activeActionMenuId || locationPopoverProductId) && (
+              <div
+                className="fixed inset-0 z-20 cursor-default"
+                onClick={() => {
+                  setActiveActionMenuId(null);
+                  setLocationPopoverProductId(null);
+                }}
+              />
+            )}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+              {filteredProducts.map(product => {
+                const isSelected = selectedProductIds.includes(product.id);
+                const status =
+                  product.stock <= 0
+                    ? 'out'
+                    : product.stock <= product.reorderPoint
+                      ? 'low'
+                      : 'healthy';
+                const productLocations = getProductLocations(product);
+                const locStock = getProductLocationStock(product);
+
+                return (
+                  <article
+                    key={product.id}
+                    id={`card-${product.id}`}
+                    className={`group relative flex flex-col justify-between rounded-2xl border transition-all duration-200 ${
+                      isSelected
+                        ? 'border-indigo-500 bg-indigo-50/20 shadow-md ring-2 ring-indigo-500/30'
+                        : 'border-slate-200/90 bg-white shadow-xs hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5'
+                    }`}
+                  >
+                    {/* Media / Thumbnail Header */}
+                    <div
+                      className="relative aspect-[16/10] w-full cursor-pointer overflow-hidden rounded-t-2xl bg-slate-100"
+                      onClick={() => {
+                        setDetailProduct(product);
+                        setIsDetailModalOpen(true);
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setDetailProduct(product);
+                          setIsDetailModalOpen(true);
+                        }
+                      }}
+                      aria-label={`View details for ${product.name}`}
+                    >
+                      {product.imageUrl ? (
+                        <img
+                          src={product.imageUrl}
+                          alt=""
+                          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-400">
+                          <Package className="h-10 w-10 transition-transform duration-300 group-hover:scale-110" />
+                        </div>
+                      )}
+
+                      {/* Subtle dark gradient overlay on hover */}
+                      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-slate-950/40 via-transparent to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
+
+                      {/* Floating Quick View hint on hover */}
+                      <div className="pointer-events-none absolute bottom-2.5 left-1/2 -translate-x-1/2 translate-y-1 transform inline-flex items-center gap-1.5 rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-bold text-slate-800 shadow-md backdrop-blur-xs opacity-0 transition-all duration-200 group-hover:translate-y-0 group-hover:opacity-100">
+                        <Eye className="h-3 w-3 text-indigo-600" />
+                        <span>Quick View</span>
+                      </div>
+
+                      {/* Checkbox overlay top-left */}
+                      <div
+                        className="absolute left-2.5 top-2.5 z-10"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <label className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-white/70 bg-white/90 shadow-sm backdrop-blur-sm transition-colors hover:bg-white">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelection(product.id)}
+                            className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                        </label>
+                      </div>
+
+                      {/* Status Badge top-right */}
+                      <div className="absolute right-2.5 top-2.5 z-10">
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold shadow-xs backdrop-blur-sm ${
+                            status === 'out'
+                              ? 'border-rose-200 bg-rose-50/95 text-rose-700'
+                              : status === 'low'
+                                ? 'border-amber-200 bg-amber-50/95 text-amber-700'
+                                : 'border-emerald-200 bg-emerald-50/95 text-emerald-700'
+                          }`}
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                              status === 'out'
+                                ? 'bg-rose-500 animate-pulse'
+                                : status === 'low'
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                            }`}
+                          />
+                          <span>{status === 'out' ? 'OUT' : status === 'low' ? 'LOW' : 'IN STOCK'}</span>
+                        </span>
+                      </div>
+
+                      {/* Variants indicator bottom-left if any */}
+                      {product.variants && product.variants.length > 0 && (
+                        <div className="absolute bottom-2 left-2.5 z-10">
+                          <span className="inline-flex items-center gap-1 rounded-md bg-slate-900/80 px-2 py-0.5 text-[10px] font-semibold text-white shadow-xs backdrop-blur-xs">
+                            <Layers className="h-2.5 w-2.5" />
+                            <span>{product.variants.length} Var</span>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Card Content */}
+                    <div className="flex flex-1 flex-col justify-between gap-3 p-3.5 sm:p-4">
+                      <div>
+                        {/* Category & SKU */}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                            {product.category}
+                          </span>
+                          <span className="shrink-0 rounded-md border border-slate-200/60 bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-700">
+                            {product.sku}
+                          </span>
+                        </div>
+
+                        {/* Product Title */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDetailProduct(product);
+                            setIsDetailModalOpen(true);
+                          }}
+                          className="mt-1 block min-h-[2.5rem] w-full text-left font-bold text-sm leading-snug text-slate-900 line-clamp-2 hover:text-indigo-600 transition-colors"
+                          title={product.name}
+                        >
+                          {product.name}
+                        </button>
+
+                        {/* Location(s) Display with Popover */}
+                        <div className="mt-1.5 relative">
+                          {productLocations.length <= 1 ? (
+                            <div className="flex items-center gap-1 text-[11px] font-medium text-slate-500 truncate">
+                              <MapPin className="h-3 w-3 text-slate-400 shrink-0" />
+                              <span className="truncate">{productLocations[0] || 'Store Shelf'}</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <span className="inline-flex items-center gap-1 rounded-md border border-indigo-200/50 bg-indigo-50/80 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 truncate max-w-[130px]">
+                                <MapPin className="h-2.5 w-2.5 text-indigo-500 shrink-0" />
+                                <span className="truncate">{productLocations[0]}</span>
+                                {locStock[0] && <span className="font-mono font-bold text-indigo-950">({locStock[0].stock})</span>}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setLocationPopoverProductId(locationPopoverProductId === product.id ? null : product.id);
+                                }}
+                                className="inline-flex shrink-0 items-center rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 transition-colors hover:bg-slate-200"
+                                title={`Stored across ${productLocations.length} locations. Click to view.`}
+                              >
+                                +{productLocations.length - 1}
+                              </button>
+
+                              {locationPopoverProductId === product.id && (
+                                <div className="absolute left-0 top-full z-40 mt-1 min-w-[200px] rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl ring-1 ring-black/5 animate-in fade-in duration-100">
+                                  <div className="mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                    <MapPin className="h-3 w-3 text-indigo-600" />
+                                    Storage Locations
+                                  </div>
+                                  <div className="space-y-1">
+                                    {locStock.map(ls => (
+                                      <div key={ls.location} className="flex items-center justify-between text-xs py-0.5">
+                                        <span className="font-medium text-slate-700">{ls.location}</span>
+                                        <span className="font-mono font-bold text-indigo-600">{ls.stock}</span>
+                                      </div>
+                                    ))}
+                                    <div className="mt-1 flex items-center justify-between border-t border-slate-100 pt-1 text-xs font-bold text-slate-900">
+                                      <span>Total</span>
+                                      <span className="font-mono">{product.stock} units</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        {/* Stock & Pricing Metric Box with Stock Progress Bar */}
+                        <div className="rounded-xl border border-slate-100/90 bg-slate-50/90 p-2.5 space-y-2">
+                          <div className="flex items-end justify-between gap-2">
+                            <div>
+                              <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400">Stock on Hand</div>
+                              <div className="mt-0.5 flex items-baseline gap-1">
+                                <span className={`font-mono text-lg font-bold ${
+                                  status === 'out' ? 'text-rose-600' : status === 'low' ? 'text-amber-600' : 'text-slate-900'
+                                }`}>
+                                  {product.stock.toLocaleString()}
+                                </span>
+                                <span className="text-[11px] font-medium text-slate-400">/ {product.reorderPoint}</span>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400">Retail Price</div>
+                              <div className="mt-0.5 font-mono text-base font-bold text-slate-900">
+                                {formatAmount(product.price)}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Stock Level Health Bar */}
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200/70">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${
+                                status === 'out'
+                                  ? 'bg-rose-500 w-full'
+                                  : status === 'low'
+                                    ? 'bg-amber-500'
+                                    : 'bg-emerald-500'
+                              }`}
+                              style={{
+                                width: status === 'out'
+                                  ? '100%'
+                                  : `${Math.min(100, Math.max(8, (product.stock / Math.max(1, product.reorderPoint * 2)) * 100))}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Actions Bar */}
+                        <div className="mt-3 flex items-center gap-1.5 border-t border-slate-100 pt-2.5">
+                          {canAdjust ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => setReasonDialog({ product, quantity: 10 })}
+                              className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-indigo-50 px-2.5 py-2 text-xs font-bold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:opacity-50"
+                              title="Quick Restock +10"
+                            >
+                              <span>+10 Restock</span>
+                            </button>
+                          ) : (
                             <button
                               type="button"
                               onClick={() => {
                                 setDetailProduct(product);
                                 setIsDetailModalOpen(true);
                               }}
-                              className="rounded-lg bg-slate-100 p-2"
-                              title="View"
+                              className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-slate-100 px-2.5 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-200"
                             >
-                              <Eye className="h-4 w-4" />
+                              <Eye className="h-3.5 w-3.5 text-slate-500" />
+                              <span>Details</span>
                             </button>
+                          )}
 
-                            {canAdjust && (
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() => setReasonDialog({ product, quantity: 10 })}
-                                className="rounded-lg bg-indigo-50 px-2.5 py-1.5 font-bold text-indigo-700 disabled:opacity-50"
-                                title="Restock"
-                              >
-                                +10
-                              </button>
-                            )}
+                          <button
+                            type="button"
+                            onClick={() => openBarcode(product)}
+                            className="rounded-xl bg-slate-100 p-2 text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-800"
+                            title="Barcode Studio"
+                            aria-label="Barcode Studio"
+                          >
+                            <Barcode className="h-4 w-4" />
+                          </button>
 
-                            {canTransfer && (
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() => setTransferDialog(product)}
-                                className="rounded-lg bg-slate-100 px-2.5 py-1.5 font-semibold text-slate-700 disabled:opacity-50"
-                              >
-                                Move
-                              </button>
-                            )}
-
+                          {/* Three Dot Action Dropdown Menu */}
+                          <div className="relative">
                             <button
                               type="button"
-                              onClick={() => openBarcode(product)}
-                              className="rounded-lg bg-slate-100 p-2"
-                              title="Barcode"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveActionMenuId(activeActionMenuId === product.id ? null : product.id);
+                              }}
+                              className="rounded-xl bg-slate-100 p-2 text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-800"
+                              title="Actions"
+                              aria-label="Actions"
                             >
-                              <Barcode className="h-4 w-4" />
+                              <MoreHorizontal className="h-4 w-4" />
                             </button>
 
-                            {canEdit && (
-                              <button
-                                type="button"
-                                onClick={() => openEdit(product)}
-                                className="rounded-lg bg-slate-100 p-2"
-                                title="Edit"
-                              >
-                                <Edit2 className="h-4 w-4" />
-                              </button>
-                            )}
+                            {activeActionMenuId === product.id && (
+                              <div className="absolute right-0 bottom-full z-40 mb-1 w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5 animate-in fade-in duration-100 text-left">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    setDetailProduct(product);
+                                    setIsDetailModalOpen(true);
+                                  }}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 text-left"
+                                >
+                                  <Eye className="h-3.5 w-3.5 text-slate-500" />
+                                  <span>View Details</span>
+                                </button>
 
-                            {canDelete && (
-                              <button
-                                type="button"
-                                onClick={() => setDeleteDialog([product.id])}
-                                className="rounded-lg bg-rose-50 p-2 text-rose-600"
-                                title="Delete"
-                              >
-                                <Trash className="h-4 w-4" />
-                              </button>
+                                {canEdit && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveActionMenuId(null);
+                                      openEdit(product);
+                                    }}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 text-left"
+                                  >
+                                    <Edit2 className="h-3.5 w-3.5 text-slate-500" />
+                                    <span>Edit Product</span>
+                                  </button>
+                                )}
+
+                                {canTransfer && (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => {
+                                      setActiveActionMenuId(null);
+                                      setTransferDialog(product);
+                                    }}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-700 text-left"
+                                  >
+                                    <ArrowRightLeft className="h-3.5 w-3.5 text-indigo-600" />
+                                    <span>Transfer Stock</span>
+                                  </button>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    openBarcode(product);
+                                  }}
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 text-left"
+                                >
+                                  <Barcode className="h-3.5 w-3.5 text-slate-500" />
+                                  <span>Barcode Studio</span>
+                                </button>
+
+                                {canDelete && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveActionMenuId(null);
+                                      setDeleteDialog([product.id]);
+                                    }}
+                                    className="mt-1 flex w-full items-center gap-2 border-t border-slate-100 px-3 pt-1.5 py-2 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50 text-left"
+                                  >
+                                    <Trash className="h-3.5 w-3.5 text-rose-500" />
+                                    <span>Delete Product</span>
+                                  </button>
+                                )}
+                              </div>
                             )}
                           </div>
-                        </td>
-                      </tr>
-
-                      {expanded && product.variants?.map(variant => (
-                        <tr key={variant.id || variant.sku} className="bg-slate-50/70">
-                          <td />
-                          <td className="px-3 py-2 pl-14 text-slate-600">Variant</td>
-                          <td className="px-3 py-2 font-mono text-slate-600">{variant.sku}</td>
-                          <td />
-                          <td className="px-3 py-2 text-right font-mono font-bold">{variant.stock}</td>
-                          <td colSpan={3} />
-                        </tr>
-                      ))}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="grid gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {filteredProducts.map(product => (
-              <article
-                key={product.id}
-                id={`card-${product.id}`}
-                className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
-              >
-                <div className="relative aspect-[4/3] bg-slate-100">
-                  {product.imageUrl ? (
-                    <img src={product.imageUrl} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    <Package className="absolute left-1/2 top-1/2 h-10 w-10 -translate-x-1/2 -translate-y-1/2 text-slate-300" />
-                  )}
-                  <div className="absolute left-3 top-3">
-                    <input
-                      type="checkbox"
-                      checked={selectedProductIds.includes(product.id)}
-                      onChange={() => toggleSelection(product.id)}
-                      className="h-4 w-4"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-3 p-4">
-                  <div>
-                    <h3 className="truncate font-bold text-slate-900">{product.name}</h3>
-                    <p className="font-mono text-[11px] text-slate-500">{product.sku}</p>
-                  </div>
-
-                  <div className="flex items-end justify-between">
-                    <div>
-                      <div className="text-[10px] uppercase text-slate-400">On hand</div>
-                      <div className="font-mono text-xl font-bold">{product.stock}</div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-[10px] uppercase text-slate-400">Price</div>
-                      <div className="font-bold">{formatAmount(product.price)}</div>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDetailProduct(product);
-                        setIsDetailModalOpen(true);
-                      }}
-                      className="flex-1 rounded-xl bg-slate-100 px-2 py-2 text-xs font-semibold"
-                    >
-                      Detail
-                    </button>
-                    {canAdjust && (
-                      <button
-                        type="button"
-                        onClick={() => setReasonDialog({ product, quantity: 10 })}
-                        className="rounded-xl bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700"
-                      >
-                        +10
-                      </button>
-                    )}
-                    {canEdit && (
-                      <button
-                        type="button"
-                        onClick={() => openEdit(product)}
-                        className="rounded-xl bg-slate-100 p-2"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </article>
-            ))}
+                  </article>
+                );
+              })}
+            </div>
           </div>
         )}
       </section>
@@ -1850,13 +2820,14 @@ export default function InventoryModule({
 
       <TransferDialog
         open={!!transferDialog}
-        locations={locations}
+        product={transferDialog}
+        locations={effectiveLocations}
         onCancel={() => setTransferDialog(null)}
-        onSubmit={async (toLocationId, quantity, reason, reference) => {
+        onSubmit={async (fromLocationId, toLocationId, quantity, reason, reference) => {
           if (!transferDialog) return;
           const product = transferDialog;
           setTransferDialog(null);
-          await handleTransfer(product, toLocationId, quantity, reason, reference);
+          await handleTransfer(product, fromLocationId, toLocationId, quantity, reason, reference);
         }}
       />
 

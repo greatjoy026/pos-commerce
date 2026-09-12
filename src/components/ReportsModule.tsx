@@ -192,7 +192,7 @@ export default function ReportsModule({
   };
 
   return (
-    <div className="min-h-screen bg-slate-50/60 p-3 sm:p-5 lg:p-8 space-y-4 sm:space-y-6 max-w-7xl mx-auto" id="reports-module-root">
+    <div className="w-full max-w-full space-y-4 sm:space-y-6" id="reports-module-root">
       
       {/* 1. Header with Controls & Date Filter */}
       <ReportsHeader

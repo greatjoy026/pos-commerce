@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import JsBarcode from 'jsbarcode';
 import { useCurrency } from '../context/CurrencyContext';
+import { getProductLocations, getProductLocationStock } from '../utils/locationUtils';
 
 interface ProductDetailModalProps {
   product: Product | null;
@@ -252,10 +253,23 @@ export default function ProductDetailModal({
                   <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
                     <MapPin className="w-4 h-4" />
                   </div>
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="text-[10px] uppercase font-bold text-gray-400 block">Storage Distribution</span>
-                    <span className="text-xs font-bold text-slate-800">{product.location}</span>
-                    <p className="text-[10px] text-gray-500 mt-0.5">Primary designated inventory node.</p>
+                    {getProductLocations(product).length > 1 ? (
+                      <div className="mt-1 space-y-1">
+                        {getProductLocationStock(product).map(ls => (
+                          <div key={ls.location} className="flex items-center justify-between text-xs">
+                            <span className="font-semibold text-slate-700">{ls.location}:</span>
+                            <span className="font-mono font-bold text-indigo-600">{ls.stock} units</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-xs font-bold text-slate-800">{getProductLocations(product)[0] || product.location || 'Store Shelf'}</span>
+                        <p className="text-[10px] text-gray-500 mt-0.5">Primary designated inventory facility.</p>
+                      </>
+                    )}
                   </div>
                 </div>
 

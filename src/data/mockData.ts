@@ -21,7 +21,12 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 45,
     category: 'Electronics',
     brand: 'Sony',
-    location: 'Store Shelf',
+    location: 'Store Shelf, Warehouse',
+    locations: ['Store Shelf', 'Warehouse'],
+    locationStock: [
+      { location: 'Store Shelf', stock: 20, reorderPoint: 10 },
+      { location: 'Warehouse', stock: 25, reorderPoint: 5 }
+    ],
     reorderPoint: 15,
     barcode: '880192837401',
     qrCode: 'QR-EL-HP-001',
@@ -106,7 +111,12 @@ export const INITIAL_PRODUCTS: Product[] = [
     stock: 120,
     category: 'Apparel & Fashion',
     brand: 'Nike',
-    location: 'Warehouse',
+    location: 'Warehouse, Store Shelf',
+    locations: ['Warehouse', 'Store Shelf'],
+    locationStock: [
+      { location: 'Warehouse', stock: 80, reorderPoint: 20 },
+      { location: 'Store Shelf', stock: 40, reorderPoint: 10 }
+    ],
     reorderPoint: 30,
     barcode: '880192837403',
     qrCode: 'QR-AP-SK-012',

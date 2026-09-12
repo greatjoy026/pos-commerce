@@ -15,7 +15,7 @@ import {
 import { db, auth } from '../lib/firebase';
 import { Product, PublicProductProjection, Customer, StaffMember, Order, AuditLog, SystemSettings, PublicSettingsProjection, ShiftReportData } from '../types';
 import { normalizeToLegacyProduct, toPublicCatalogProjection } from '../domain/product';
-import { InventoryRecord, validateInventoryRecord } from '../domain/inventory';
+import { InventoryRecord, validateInventoryRecord, InventoryMovementRecord, validateInventoryMovementRecord } from '../domain/inventory';
 import { 
   INITIAL_PRODUCTS, 
   INITIAL_CUSTOMERS, 
@@ -29,6 +29,7 @@ export const COLLECTIONS = {
   PRODUCTS: 'products',
   PUBLIC_PRODUCTS: 'public_products',
   INVENTORY: 'inventory',
+  INVENTORY_MOVEMENTS: 'inventory_movements',
   CUSTOMERS: 'customers',
   STAFF: 'staff',
   STAFF_CREDENTIALS: 'staff_credentials',
@@ -811,6 +812,61 @@ export async function getInventoryBySku(sku: string): Promise<InventoryRecord[]>
     return records;
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.INVENTORY}?sku=${sku}`);
+    return [];
+  }
+}
+
+/**
+ * Subscribes to immutable inventory movements for a specific inventory record or location.
+ */
+export function subscribeInventoryMovements(
+  inventoryId: string,
+  onUpdate: (movements: InventoryMovementRecord[]) => void,
+  onError?: (err: any) => void
+) {
+  const colRef = collection(db, COLLECTIONS.INVENTORY_MOVEMENTS);
+  return onSnapshot(colRef, (snapshot) => {
+    if (!snapshot.empty) {
+      const records: InventoryMovementRecord[] = [];
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        if (typeof data.inventoryId === 'string' && data.inventoryId === inventoryId) {
+          const val = validateInventoryMovementRecord(data);
+          if (val.isValid && val.record) {
+            records.push(val.record);
+          }
+        }
+      });
+      onUpdate(records);
+    } else {
+      onUpdate([]);
+    }
+  }, (err) => {
+    handleFirestoreError(err, OperationType.LIST, COLLECTIONS.INVENTORY_MOVEMENTS);
+    if (onError) onError(err);
+  });
+}
+
+/**
+ * Queries inventory movements for a specific inventory record.
+ */
+export async function getInventoryMovements(inventoryId: string): Promise<InventoryMovementRecord[]> {
+  try {
+    const colRef = collection(db, COLLECTIONS.INVENTORY_MOVEMENTS);
+    const snap = await getDocs(colRef);
+    const records: InventoryMovementRecord[] = [];
+    snap.forEach(docSnap => {
+      const data = docSnap.data();
+      if (typeof data.inventoryId === 'string' && data.inventoryId === inventoryId) {
+        const val = validateInventoryMovementRecord(data);
+        if (val.isValid && val.record) {
+          records.push(val.record);
+        }
+      }
+    });
+    return records;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `${COLLECTIONS.INVENTORY_MOVEMENTS}?inventoryId=${inventoryId}`);
     return [];
   }
 }

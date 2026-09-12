@@ -32,7 +32,10 @@ import {
   toOperationalInventoryProjection,
   toPublicAvailabilityFromInventory,
   aggregateInventoryBalances,
-  DEFAULT_LOCATION_ID
+  DEFAULT_LOCATION_ID,
+  calculateMovementOutcome,
+  validateInventoryMovementRecord,
+  assertValidInventoryMovementRecord
 } from '../src/domain/inventory';
 
 import {
@@ -1298,6 +1301,301 @@ describe('INV-001 — Authoritative Inventory Domain Architecture', () => {
         assert.strictEqual(keyBatch2, 'SKU-A::location-1::BATCH-002');
         assert.notStrictEqual(keyBatch1, keyBatch2, 'Distinct batches of the same SKU at the same location must not collide');
       });
+    });
+  });
+
+  // ==========================================================================
+  // 7. INV-002 — Ledger Movements & Transactional Allocation
+  // ==========================================================================
+  describe('7. INV-002 — Ledger Movements & Transactional Allocation', () => {
+    const baseRecord = createInventoryRecord({
+      id: 'inv-movement-test-1',
+      sku: 'SKU-LEDGER-01',
+      productId: 'prod-ledger-1',
+      locationId: 'loc-main',
+      quantityOnHand: 100,
+      quantityReserved: 10,
+      trackingMode: 'QUANTITY',
+      status: 'ACTIVE'
+    });
+
+    it('PURCHASE_RECEIPT increases quantityOnHand (100 + 20 = 120) and creates positive delta movement', () => {
+      const outcome = calculateMovementOutcome(baseRecord, {
+        movementType: 'PURCHASE_RECEIPT',
+        quantityParam: 20,
+        performedBy: 'staff-inventory-mgr',
+        referenceId: 'PO-2026-001'
+      });
+
+      assert.strictEqual(outcome.updatedRecord.quantityOnHand, 120);
+      assert.strictEqual(outcome.movementRecord.quantityDelta, 20);
+      assert.strictEqual(outcome.movementRecord.quantityBefore, 100);
+      assert.strictEqual(outcome.movementRecord.quantityAfter, 120);
+      assert.strictEqual(outcome.movementRecord.movementType, 'PURCHASE_RECEIPT');
+      assert.strictEqual(outcome.movementRecord.performedBy, 'staff-inventory-mgr');
+      assert.strictEqual(outcome.movementRecord.referenceId, 'PO-2026-001');
+    });
+
+    it('SALE decreases quantityOnHand (100 - 20 = 80) and creates negative delta movement', () => {
+      const outcome = calculateMovementOutcome(baseRecord, {
+        movementType: 'SALE',
+        quantityParam: 20,
+        performedBy: 'staff-cashier-1',
+        referenceId: 'ORD-9901'
+      });
+
+      assert.strictEqual(outcome.updatedRecord.quantityOnHand, 80);
+      assert.strictEqual(outcome.movementRecord.quantityDelta, -20);
+      assert.strictEqual(outcome.movementRecord.quantityBefore, 100);
+      assert.strictEqual(outcome.movementRecord.quantityAfter, 80);
+      assert.strictEqual(outcome.movementRecord.movementType, 'SALE');
+      assert.strictEqual(outcome.movementRecord.referenceId, 'ORD-9901');
+    });
+
+    it('RETURN increases quantityOnHand (80 + 10 = 90) and creates positive delta movement', () => {
+      const current80 = { ...baseRecord, quantityOnHand: 80 };
+      const outcome = calculateMovementOutcome(current80, {
+        movementType: 'RETURN',
+        quantityParam: 10,
+        performedBy: 'staff-cashier-1',
+        referenceId: 'RET-101',
+        reason: 'Customer return - unopened'
+      });
+
+      assert.strictEqual(outcome.updatedRecord.quantityOnHand, 90);
+      assert.strictEqual(outcome.movementRecord.quantityDelta, 10);
+      assert.strictEqual(outcome.movementRecord.quantityBefore, 80);
+      assert.strictEqual(outcome.movementRecord.quantityAfter, 90);
+      assert.strictEqual(outcome.movementRecord.movementType, 'RETURN');
+    });
+
+    it('ADJUSTMENT allows positive delta (90 + 5 = 95) and negative delta (95 - 5 = 90) with mandatory reason', () => {
+      const rec90 = { ...baseRecord, quantityOnHand: 90 };
+
+      // Positive adjustment
+      const posOutcome = calculateMovementOutcome(rec90, {
+        movementType: 'ADJUSTMENT',
+        quantityParam: 5,
+        performedBy: 'staff-auditor',
+        reason: 'Cycle count audit correction (+5 found)'
+      });
+
+      assert.strictEqual(posOutcome.updatedRecord.quantityOnHand, 95);
+      assert.strictEqual(posOutcome.movementRecord.quantityDelta, 5);
+
+      // Negative adjustment
+      const negOutcome = calculateMovementOutcome(posOutcome.updatedRecord, {
+        movementType: 'ADJUSTMENT',
+        quantityParam: -5,
+        performedBy: 'staff-auditor',
+        reason: 'Damaged item written off (-5)'
+      });
+
+      assert.strictEqual(negOutcome.updatedRecord.quantityOnHand, 90);
+      assert.strictEqual(negOutcome.movementRecord.quantityDelta, -5);
+    });
+
+    it('ADJUSTMENT strictly requires a non-empty reason', () => {
+      assert.throws(() => {
+        calculateMovementOutcome(baseRecord, {
+          movementType: 'ADJUSTMENT',
+          quantityParam: 5,
+          performedBy: 'staff-auditor',
+          reason: '' // empty reason
+        });
+      }, /ADJUSTMENT requires a non-empty reason/);
+    });
+
+    it('SALE rejects request exceeding available quantity (onHand=10, reserved=8, available=2; requesting 3)', () => {
+      const restrictedRecord = createInventoryRecord({
+        sku: 'SKU-RESTRICTED',
+        productId: 'prod-r1',
+        quantityOnHand: 10,
+        quantityReserved: 8,
+        trackingMode: 'QUANTITY'
+      });
+
+      // Available = 10 - 8 = 2. Selling 2 succeeds.
+      const validSale = calculateMovementOutcome(restrictedRecord, {
+        movementType: 'SALE',
+        quantityParam: 2,
+        performedBy: 'staff-1'
+      });
+      assert.strictEqual(validSale.updatedRecord.quantityOnHand, 8);
+
+      // Selling 3 exceeds available quantity (2) and must be rejected.
+      assert.throws(() => {
+        calculateMovementOutcome(restrictedRecord, {
+          movementType: 'SALE',
+          quantityParam: 3,
+          performedBy: 'staff-1'
+        });
+      }, /INSUFFICIENT_INVENTORY/);
+    });
+
+    it('rejects non-integer / fractional movement quantities (1.5, 0.5, NaN, Infinity)', () => {
+      for (const badQty of [1.5, 0.5, NaN, Infinity, -Infinity]) {
+        assert.throws(() => {
+          calculateMovementOutcome(baseRecord, {
+            movementType: 'PURCHASE_RECEIPT',
+            quantityParam: badQty,
+            performedBy: 'staff-1'
+          });
+        }, /finite integer/);
+      }
+    });
+
+    it('rejects non-positive quantities for PURCHASE_RECEIPT, SALE, and RETURN', () => {
+      for (const badQty of [0, -1, -10]) {
+        assert.throws(() => {
+          calculateMovementOutcome(baseRecord, {
+            movementType: 'PURCHASE_RECEIPT',
+            quantityParam: badQty,
+            performedBy: 'staff-1'
+          });
+        }, /strictly positive/);
+
+        assert.throws(() => {
+          calculateMovementOutcome(baseRecord, {
+            movementType: 'SALE',
+            quantityParam: badQty,
+            performedBy: 'staff-1'
+          });
+        }, /strictly positive/);
+
+        assert.throws(() => {
+          calculateMovementOutcome(baseRecord, {
+            movementType: 'RETURN',
+            quantityParam: badQty,
+            performedBy: 'staff-1'
+          });
+        }, /strictly positive/);
+      }
+    });
+
+    it('rejects zero quantityParam for ADJUSTMENT', () => {
+      assert.throws(() => {
+        calculateMovementOutcome(baseRecord, {
+          movementType: 'ADJUSTMENT',
+          quantityParam: 0,
+          performedBy: 'staff-1',
+          reason: 'No change'
+        });
+      }, /cannot be zero/);
+    });
+
+    it('validates and verifies complete InventoryMovementRecord schema and invariant math', () => {
+      const outcome = calculateMovementOutcome(baseRecord, {
+        movementType: 'PURCHASE_RECEIPT',
+        quantityParam: 50,
+        performedBy: 'staff-wh',
+        referenceId: 'PO-5001'
+      });
+
+      const validation = validateInventoryMovementRecord(outcome.movementRecord);
+      assert.strictEqual(validation.isValid, true);
+      assert.strictEqual(validation.errors.length, 0);
+      assert.doesNotThrow(() => assertValidInventoryMovementRecord(outcome.movementRecord));
+
+      // Invariant check: quantityAfter === quantityBefore + quantityDelta
+      assert.strictEqual(
+        outcome.movementRecord.quantityAfter,
+        outcome.movementRecord.quantityBefore + outcome.movementRecord.quantityDelta
+      );
+    });
+
+    it('SERIAL tracking: receipt adds serials and sale removes serials maintaining cardinality', () => {
+      const serialRecord = createInventoryRecord({
+        sku: 'LAPTOP-PRO-15',
+        productId: 'prod-lap-1',
+        quantityOnHand: 2,
+        quantityReserved: 0,
+        trackingMode: 'SERIAL',
+        serialNumbers: ['SN-LAP-001', 'SN-LAP-002']
+      });
+
+      // 1. Receipt of 2 laptops requires 2 new unique serials
+      const receiptOutcome = calculateMovementOutcome(serialRecord, {
+        movementType: 'PURCHASE_RECEIPT',
+        quantityParam: 2,
+        performedBy: 'staff-wh',
+        serialNumbers: ['SN-LAP-003', 'SN-LAP-004']
+      });
+
+      assert.strictEqual(receiptOutcome.updatedRecord.quantityOnHand, 4);
+      assert.deepStrictEqual(receiptOutcome.updatedRecord.serialNumbers, [
+        'SN-LAP-001',
+        'SN-LAP-002',
+        'SN-LAP-003',
+        'SN-LAP-004'
+      ]);
+
+      // 2. Sale of 1 laptop requires specifying existing serial to remove
+      const saleOutcome = calculateMovementOutcome(receiptOutcome.updatedRecord, {
+        movementType: 'SALE',
+        quantityParam: 1,
+        performedBy: 'staff-cashier',
+        serialNumbers: ['SN-LAP-002']
+      });
+
+      assert.strictEqual(saleOutcome.updatedRecord.quantityOnHand, 3);
+      assert.deepStrictEqual(saleOutcome.updatedRecord.serialNumbers, [
+        'SN-LAP-001',
+        'SN-LAP-003',
+        'SN-LAP-004'
+      ]);
+
+      // Rejects sale with non-existent serial number
+      assert.throws(() => {
+        calculateMovementOutcome(saleOutcome.updatedRecord, {
+          movementType: 'SALE',
+          quantityParam: 1,
+          performedBy: 'staff-cashier',
+          serialNumbers: ['SN-LAP-999'] // Not in inventory
+        });
+      }, /not found in inventory/);
+    });
+
+    it('TRANSFER: supports linked source deduction and destination addition calculations', () => {
+      const sourceRecord = createInventoryRecord({
+        sku: 'COFFEE-BEANS-1KG',
+        productId: 'prod-coffee',
+        locationId: 'loc-warehouse',
+        quantityOnHand: 50
+      });
+
+      const destRecord = createInventoryRecord({
+        sku: 'COFFEE-BEANS-1KG',
+        productId: 'prod-coffee',
+        locationId: 'loc-storefront',
+        quantityOnHand: 10
+      });
+
+      const transferRef = 'TRF-8001';
+
+      // Source deduction
+      const srcOutcome = calculateMovementOutcome(sourceRecord, {
+        movementType: 'TRANSFER',
+        quantityParam: -15,
+        performedBy: 'staff-wh',
+        referenceId: transferRef,
+        reason: 'Restock storefront'
+      });
+
+      // Destination addition
+      const destOutcome = calculateMovementOutcome(destRecord, {
+        movementType: 'TRANSFER',
+        quantityParam: 15,
+        performedBy: 'staff-wh',
+        referenceId: transferRef,
+        reason: 'Restock storefront'
+      });
+
+      assert.strictEqual(srcOutcome.updatedRecord.quantityOnHand, 35);
+      assert.strictEqual(srcOutcome.movementRecord.quantityDelta, -15);
+      assert.strictEqual(destOutcome.updatedRecord.quantityOnHand, 25);
+      assert.strictEqual(destOutcome.movementRecord.quantityDelta, 15);
+      assert.strictEqual(srcOutcome.movementRecord.referenceId, destOutcome.movementRecord.referenceId);
     });
   });
 });

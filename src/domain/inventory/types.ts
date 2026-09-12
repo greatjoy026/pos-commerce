@@ -242,6 +242,8 @@ export interface InventoryMovementRecord {
   id: string;
   inventoryId: string;
   sku: string;
+  productId: string;
+  variantId?: string;
   locationId: string;
   movementType: InventoryMovementType;
   quantityDelta: number;

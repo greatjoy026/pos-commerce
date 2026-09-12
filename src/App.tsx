@@ -720,8 +720,8 @@ export default function App() {
       
       {/* Top Main Mode Selector - Core Showroom navigation (Only shown in Admin mode) */}
       {currentView === 'Admin' && (
-        <header className="bg-slate-900 border-b border-white/10 px-3 sm:px-6 py-2.5 sticky top-0 z-40 shadow-md backdrop-blur-md" id="master-mode-navbar">
-          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+        <header className="bg-slate-900 border-b border-white/10 px-3 sm:px-6 lg:px-8 py-2.5 sticky top-0 z-40 shadow-md backdrop-blur-md" id="master-mode-navbar">
+          <div className="w-full max-w-full 2xl:max-w-[1920px] mx-auto flex items-center justify-between gap-3">
             
             {/* Left Brand & Mobile Navigation Trigger */}
             <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
@@ -832,10 +832,10 @@ export default function App() {
             <main 
               className={`transition-all duration-300 ease-in-out ${
                 isSidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'
-              } p-5 sm:p-7 lg:p-10 pb-24 lg:pb-12`} 
+              } p-4 sm:p-6 lg:px-8 lg:py-7 xl:px-10 pb-24 lg:pb-12`} 
               id="admin-main-board"
             >
-              <div className="max-w-[1500px] mx-auto w-full space-y-6">
+              <div className="w-full max-w-full 2xl:max-w-[1920px] mx-auto space-y-6">
                 {adminSubTab === 'Dashboard' && (
                   <DashboardOverview
                     products={products}

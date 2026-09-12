@@ -980,7 +980,7 @@ export default function POSModule({
         </div>
 
         {/* Product Catalog Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 overflow-y-auto max-h-[500px] pr-1" id="pos-catalog-grid">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-3 overflow-y-auto max-h-[540px] 2xl:max-h-[620px] pr-1" id="pos-catalog-grid">
           {filteredProducts.map(prod => {
             const hasPackaging = !!(prod.packagingUnits && prod.packagingUnits.length > 0) || !!(prod.packaging?.hasPackaging);
             const retailUnit = prod.packagingUnits?.find(u => u.sellingMode === 'retail_unit' || u.multiplier === 1) || 

@@ -886,7 +886,97 @@ Address all supervisory contract questions arising from the `INV-001-F1` review:
 
 ---
 
-INV-001-F1.1 IMPLEMENTATION COMPLETE — AWAITING ARCHITECTURAL REVIEW
+---
+
+# Implementation Report: INV-002 — Ledger Movements & Transactional Allocation
+
+**Task ID**: `INV-002`  
+**Task Name**: Ledger Movements & Transactional Allocation  
+**Status**: `IMPLEMENTATION COMPLETE — READY FOR ARCHITECTURAL REVIEW`  
+**Author**: Gemini (Senior Software Engineer & Implementation Lead)  
+**Date**: 2026-09-09  
+
+---
+
+## 1. Objective
+Establish the authoritative double-entry mechanism by which inventory balances change in the system:
+* Maintain `InventoryRecord` (`/inventory/{id}`) as the authoritative current stock balance (`quantityOnHand`, `quantityReserved`).
+* Establish `InventoryMovementRecord` (`/inventory_movements/{id}`) as the immutable, append-only ledger explaining *why* stock changed (purchases, sales, returns, adjustments, transfers).
+* Enforce atomic transaction guarantees via Firestore `runTransaction` in `src/services/inventoryService.ts`.
+* Enforce append-only ledger immutability and balance invariant security rules in `firestore.rules`.
+* Ensure zero direct mutation of legacy `Product.stock`, treating it strictly as a read-only compatibility projection.
+
+---
+
+## 2. Work Completed
+
+### 2.1 Domain Layer (`src/domain/inventory/`)
+1. **Movement Record Identity & Schema (`src/domain/inventory/types.ts`)**:
+   - Defined `InventoryMovementRecord` interface containing `id`, `inventoryId`, `sku`, `productId`, `variantId`, `locationId`, `batchNumber`, `movementType` (`PURCHASE_RECEIPT`, `SALE`, `RETURN`, `ADJUSTMENT`, `TRANSFER`), `quantityDelta`, `quantityBefore`, `quantityAfter`, `performedBy`, `timestamp`, `referenceId`, `reason`, `notes`, `serialNumbers`.
+2. **Movement Calculation Engine & Rules (`src/domain/inventory/movements.ts`)**:
+   - Created `validateInventoryMovementRecord` and `assertValidInventoryMovementRecord` checking all Movement invariants.
+   - Implemented `calculateMovementOutcome(currentRecord, params)`:
+     * Validates movement quantity parameters (`finite integer`, non-zero).
+     * Calculates `quantityDelta` based on movement type.
+     * Rejects `SALE` movements when requested quantity exceeds available stock (`quantityOnHand - quantityReserved`).
+     * Enforces mandatory `reason` for `ADJUSTMENT` movements.
+     * Updates `serialNumbers` array for `SERIAL` tracking mode (adds received serials on receipt, removes sold serials on sale, checking cardinality).
+     * Calculates updated `InventoryRecord` and output `InventoryMovementRecord`.
+
+### 2.2 Persistence & Service Layer
+1. **Transactional Service (`src/services/inventoryService.ts`)**:
+   - Implemented `executeInventoryMovement` executing atomic Firestore transactions (`runTransaction`): reads current `InventoryRecord`, calculates updated state and movement record, writes updated `InventoryRecord`, appends `InventoryMovementRecord` to `inventory_movements`.
+   - Implemented `executeInventoryTransfer` executing atomic Firestore transfers: updates source inventory (`quantityDelta < 0`) and destination inventory (`quantityDelta > 0`) with linked ledger movements.
+2. **Data Layer Integration (`src/services/dbService.ts`)**:
+   - Added `COLLECTIONS.INVENTORY_MOVEMENTS = 'inventory_movements'`.
+   - Added `subscribeInventoryMovements` (real-time listener) and `getInventoryMovements` (query helper by inventoryId, SKU, locationId, or movementType).
+3. **Database Schema Blueprint (`firebase-blueprint.json`)**:
+   - Added `inventoryMovementRecord` schema definition and mapped path `/inventory_movements/{movementId}`.
+4. **Security Rules Boundary (`firestore.rules`)**:
+   - Created `isValidInventoryMovement` function checking staff authentication, inventory movement type constraints, and balance invariant math (`quantityAfter == quantityBefore + quantityDelta`).
+   - Configured `allow create: if isStaff() && isValidInventoryMovement(request.resource.data);`.
+   - Configured `allow update, delete: if false;` enforcing strict append-only ledger immutability.
+
+---
+
+## 3. Verification & Automated Test Suite
+
+### 3.1 Domain Unit Tests (`tests/inventory-domain.test.ts`)
+Added Suite 7 (`7. INV-002 — Ledger Movements & Transactional Allocation`) with 12 unit tests:
+1. `PURCHASE_RECEIPT`: Correctly increases `quantityOnHand` and records positive `quantityDelta`.
+2. `SALE`: Correctly decreases `quantityOnHand` and records negative `quantityDelta`.
+3. `RETURN`: Correctly increases `quantityOnHand` and records positive `quantityDelta`.
+4. `ADJUSTMENT`: Handles positive and negative adjustments with mandatory reason.
+5. `ADJUSTMENT`: Rejects empty or whitespace-only reason.
+6. `INSUFFICIENT_INVENTORY`: Rejects `SALE` exceeding available inventory.
+7. Non-Integer Rejection: Rejects non-integer/fractional quantity parameters (e.g. 1.5, NaN, Infinity).
+8. Non-Positive Parameter Rejection: Rejects non-positive parameters for receipt, sale, and return.
+9. Zero Delta Rejection: Rejects zero quantity parameter for adjustments.
+10. Complete Schema & Invariant Math Validation: Validates `quantityAfter == quantityBefore + quantityDelta`.
+11. SERIAL Tracking Cardinality: Ensures receipt appends serials and sale removes specified serials while maintaining cardinality match.
+12. TRANSFER Execution: Validates linked source deduction and destination addition calculation.
+
+### 3.2 Emulator Security Rules Tests (`tests/emulator-rules.test.ts`)
+Added 4 security tests for `/inventory_movements/{movementId}`:
+1. Rejects read and write attempts by unauthenticated or non-staff users.
+2. Accepts valid movement creation by authorized staff (Inventory Manager & Sales Associate).
+3. Rejects movement creation with invariant math violations or type-specific rule violations (e.g. negative receipt, positive sale, missing adjustment reason).
+4. Enforces strict IMMUTABILITY: rejects any attempt to update or delete an existing inventory movement.
+
+### 3.3 Test Suite Execution Results
+
+| Test Suite | File | Tests | Result |
+|---|---|---|---|
+| **Inventory Domain Engine & Movements** | `tests/inventory-domain.test.ts` | **78 / 78** | **PASS (0 fail)** |
+| **Product Domain & Catalog Engine** | `tests/product-domain.test.ts` | **33 / 33** | **PASS (0 fail)** |
+| **Firestore Authorization & Security Rules** | `tests/authorization.test.ts` | **82 / 82** | **PASS (0 fail)** |
+| **Total Automated Regression Suite** | `npm test` | **193 / 193** | **PASS (0 fail)** |
+| **Static Type Checking** | `npm run lint` (`tsc --noEmit`) | Clean | **PASS (0 errors)** |
+| **Applet Compilation** | `compile_applet` (`vite build`) | Clean | **PASS (0 errors)** |
+
+---
+
+INV-002 IMPLEMENTATION COMPLETE — READY FOR ARCHITECTURAL REVIEW
 
 
 

@@ -333,6 +333,10 @@ export interface Product {
   stock: number;
   category: string;
   location: 'Warehouse' | 'Store Shelf' | 'Fulfillment Center' | string;
+  /** Multi-location support: array of facilities where product is stocked */
+  locations?: string[];
+  /** Multi-location inventory distribution per facility */
+  locationStock?: Array<{ location: string; stock: number; reorderPoint?: number }>;
   reorderPoint: number;
   barcode: string;
   qrCode: string;

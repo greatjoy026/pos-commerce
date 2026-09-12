@@ -651,6 +651,157 @@ describe('SEC-001 — Firestore Emulator Security Rules Enforcement', () => {
       await assertFails(deleteDoc(doc(invMgr, 'inventory', 'inv-scan-100')));
     });
 
+    // ========================================================================
+    // INV-002 — Inventory Movements Collection Security & Schema Enforcement
+    // ========================================================================
+    it('Unauthenticated and non-staff users CANNOT read or create inventory movements (INV-002)', async () => {
+      const unauth = testEnv.unauthenticatedContext().firestore();
+      await assertFails(getDoc(doc(unauth, 'inventory_movements', 'mov-100')));
+      await assertFails(setDoc(doc(unauth, 'inventory_movements', 'mov-100'), {
+        id: 'mov-100',
+        inventoryId: 'inv-100',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-main-store',
+        movementType: 'PURCHASE_RECEIPT',
+        quantityDelta: 10,
+        quantityBefore: 0,
+        quantityAfter: 10,
+        performedBy: 'hacker',
+        timestamp: '2026-09-08T00:00:00.000Z'
+      }));
+
+      const customer = testEnv.authenticatedContext('cust-100', { role: 'Customer' }).firestore();
+      await assertFails(getDoc(doc(customer, 'inventory_movements', 'mov-100')));
+    });
+
+    it('Authorized staff CAN create valid inventory movement records (INV-002)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+      await assertSucceeds(setDoc(doc(invMgr, 'inventory_movements', 'mov-valid-1'), {
+        id: 'mov-valid-1',
+        inventoryId: 'inv-100',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-main-store',
+        movementType: 'PURCHASE_RECEIPT',
+        quantityDelta: 20,
+        quantityBefore: 50,
+        quantityAfter: 70,
+        performedBy: 'staff-inv-1',
+        timestamp: '2026-09-08T00:00:00.000Z',
+        referenceId: 'PO-9901'
+      }));
+
+      const salesStaff = testEnv.authenticatedContext('staff-cashier-1', { role: 'Sales Associate', isStaff: true }).firestore();
+      await assertSucceeds(setDoc(doc(salesStaff, 'inventory_movements', 'mov-sale-1'), {
+        id: 'mov-sale-1',
+        inventoryId: 'inv-100',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-main-store',
+        movementType: 'SALE',
+        quantityDelta: -2,
+        quantityBefore: 70,
+        quantityAfter: 68,
+        performedBy: 'staff-cashier-1',
+        timestamp: '2026-09-08T00:00:00.000Z',
+        referenceId: 'ORD-101'
+      }));
+    });
+
+    it('Rejects invalid inventory movement schema or invariant math violations (INV-002)', async () => {
+      const invMgr = testEnv.authenticatedContext('staff-inv-1', { role: 'Inventory Manager', isStaff: true }).firestore();
+
+      // Invariant Math Violation: quantityAfter != quantityBefore + quantityDelta (70 != 50 + 10)
+      await assertFails(setDoc(doc(invMgr, 'inventory_movements', 'mov-bad-math'), {
+        id: 'mov-bad-math',
+        inventoryId: 'inv-100',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-main-store',
+        movementType: 'PURCHASE_RECEIPT',
+        quantityDelta: 10,
+        quantityBefore: 50,
+        quantityAfter: 70, // BAD
+        performedBy: 'staff-inv-1',
+        timestamp: '2026-09-08T00:00:00.000Z'
+      }));
+
+      // Negative delta for PURCHASE_RECEIPT
+      await assertFails(setDoc(doc(invMgr, 'inventory_movements', 'mov-bad-receipt'), {
+        id: 'mov-bad-receipt',
+        inventoryId: 'inv-100',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-main-store',
+        movementType: 'PURCHASE_RECEIPT',
+        quantityDelta: -5,
+        quantityBefore: 50,
+        quantityAfter: 45,
+        performedBy: 'staff-inv-1',
+        timestamp: '2026-09-08T00:00:00.000Z'
+      }));
+
+      // Positive delta for SALE
+      await assertFails(setDoc(doc(invMgr, 'inventory_movements', 'mov-bad-sale'), {
+        id: 'mov-bad-sale',
+        inventoryId: 'inv-100',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-main-store',
+        movementType: 'SALE',
+        quantityDelta: 5,
+        quantityBefore: 50,
+        quantityAfter: 55,
+        performedBy: 'staff-inv-1',
+        timestamp: '2026-09-08T00:00:00.000Z'
+      }));
+
+      // ADJUSTMENT without mandatory reason
+      await assertFails(setDoc(doc(invMgr, 'inventory_movements', 'mov-no-reason'), {
+        id: 'mov-no-reason',
+        inventoryId: 'inv-100',
+        sku: 'SCAN-100',
+        productId: 'prod-100',
+        locationId: 'loc-main-store',
+        movementType: 'ADJUSTMENT',
+        quantityDelta: -2,
+        quantityBefore: 50,
+        quantityAfter: 48,
+        performedBy: 'staff-inv-1',
+        timestamp: '2026-09-08T00:00:00.000Z'
+      }));
+    });
+
+    it('IMMUTABILITY: Rejects update and deletion of inventory movement records (INV-002)', async () => {
+      // Seed movement as admin
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const adminDb = context.firestore();
+        await setDoc(doc(adminDb, 'inventory_movements', 'mov-immutable-1'), {
+          id: 'mov-immutable-1',
+          inventoryId: 'inv-100',
+          sku: 'SCAN-100',
+          productId: 'prod-100',
+          locationId: 'loc-main-store',
+          movementType: 'PURCHASE_RECEIPT',
+          quantityDelta: 10,
+          quantityBefore: 40,
+          quantityAfter: 50,
+          performedBy: 'staff-inv-1',
+          timestamp: '2026-09-08T00:00:00.000Z'
+        });
+      });
+
+      const storeMgr = testEnv.authenticatedContext('staff-mgr-1', { role: 'Store Manager', isStaff: true }).firestore();
+      // Update attempt must fail
+      await assertFails(updateDoc(doc(storeMgr, 'inventory_movements', 'mov-immutable-1'), {
+        quantityDelta: 20
+      }));
+
+      // Delete attempt must fail
+      await assertFails(deleteDoc(doc(storeMgr, 'inventory_movements', 'mov-immutable-1')));
+    });
+
     // ------------------------------------------------------------------------
     // INV-001-F1.1 Hardening: Quantity & Tracking Boundaries
     // ------------------------------------------------------------------------

@@ -370,3 +370,43 @@ The inventory architecture implements defense-in-depth across the TypeScript dom
 2. **ISO 8601 Date Semantic Limitation**: Firestore Rules CEL lacks built-in regex pattern matching and string-to-timestamp parsing functions for arbitrary ISO strings. Rules enforces structural string bounds (`10 <= size <= 40`), while full calendar semantic validation (leap years, month/day boundaries, ISO 8601 formatting) is authoritatively enforced by `src/domain/inventory/validation.ts`.
 3. **Public Product Availability**: In alignment with `PROD-001-F2.1` and `firebase-blueprint.json`, raw numeric stock is strictly prohibited from the public storefront projection (`/public_products`), requiring categorical availability (`availability.status`).
 
+---
+
+## 11. Inventory Movements & Ledger Architecture (INV-002)
+
+### 11.1 Authoritative Dual-Entity Architecture
+To ensure absolute accounting integrity, auditability, and historical traceability, inventory management is split into two authoritative domain concepts:
+* **Current Balance State**: `InventoryRecord` (`/inventory/{inventoryId}`) holds the real-time operational stock balances (`quantityOnHand`, `quantityReserved`).
+* **Immutable Movement Ledger**: `InventoryMovementRecord` (`/inventory_movements/{movementId}`) records the authoritative events explaining *why* stock balances changed.
+* **Compatibility Projection**: `Product.stock` is strictly a read-only compatibility projection and is never directly mutated as a primary source of truth.
+
+### 11.2 Movement Types & Operations
+Each ledger movement belongs to one of five domain movement types:
+1. `PURCHASE_RECEIPT`: Incoming inventory from suppliers or purchase orders (`quantityDelta > 0`).
+2. `SALE`: Outgoing inventory for customer orders or POS checkouts (`quantityDelta < 0`).
+   - Rejects movement if requested quantity exceeds available quantity (`quantityOnHand - quantityReserved`).
+3. `RETURN`: Restocked inventory from customer returns or order cancellations (`quantityDelta > 0`).
+4. `ADJUSTMENT`: Cycle count audit corrections or shrink/damage write-offs (`quantityDelta != 0`).
+   - Requires a mandatory, non-empty `reason`.
+5. `TRANSFER`: Physical stock relocation between locations or warehouses.
+   - Atomic pair: Source movement (`quantityDelta < 0`) and Destination movement (`quantityDelta > 0`) linked by a shared `referenceId`.
+
+### 11.3 Transactional Atomicity & Concurrency Control
+All inventory mutations are executed through `executeInventoryMovement` or `executeInventoryTransfer` in `src/services/inventoryService.ts` using Firestore `runTransaction`:
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Firestore Transaction                    │
+│                                                             │
+│ 1. READ: Fetch InventoryRecord within transaction lock      │
+│ 2. VALIDATE: Ensure record exists & satisfies constraints   │
+│ 3. CALCULATE: Calculate updated balance & movement delta    │
+│ 4. WRITE: Update InventoryRecord with new balance           │
+│ 5. WRITE: Append new InventoryMovementRecord to ledger      │
+└─────────────────────────────────────────────────────────────┘
+```
+This guarantees atomicity and prevents race conditions under high concurrency.
+
+### 11.4 Append-Only Immutability & Security Rules
+* **Append-Only Ledger**: `firestore.rules` grants `allow create: if isStaff() && isValidInventoryMovement(request.resource.data);` and strictly enforces `allow update, delete: if false;`. Once recorded, inventory movements cannot be modified or deleted by any user or administrator.
+* **Balance Invariant Math**: Security rules enforce `quantityAfter == quantityBefore + quantityDelta` and type-specific rules (`quantityDelta > 0` for receipts/returns, `quantityDelta < 0` for sales).
+
