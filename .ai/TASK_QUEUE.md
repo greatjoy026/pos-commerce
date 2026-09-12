@@ -6,10 +6,10 @@
 * **Priority**: P1
 * **Type**: POS / Inventory Integration / Trusted Backend Boundary
 * **Owner**: Architecture Supervisor (direct implementation while Gemini generation unavailable)
-* **Status**: `IMPLEMENTATION IN PROGRESS`
+* **Status**: `IMPLEMENTATION IN PROGRESS — POS-001-F1 AUTOMATED CORRECTION RUN`
 * **Dependencies**: `INV-001-F1.1` — APPROVED; `INV-002` — MERGED
 * **Objective**: Connect POS sale lines to canonical SKU/variant identity and the authoritative inventory movement boundary. POS must never directly mutate inventory balances or manufacture movement records.
-* **Current Implementation**: Added trusted `recordPosSale` callable and a POS client adapter. The remaining integration work is to await the authoritative movement before POS finalization and remove the legacy App-level stock mutation path.
+* **Current Implementation**: Trusted `recordPosSale` callable and POS client adapter are present. POS-001-F1 is removing the legacy App-level stock mutation and making checkout await the authoritative inventory transaction before finalization.
 * **Scope Boundary**: No e-commerce checkout, payment gateway integration, reservation subsystem, offline inventory synchronization, accounting, or serial/batch lifecycle engine.
 
 ### `INV-002 — Ledger Movements & Transactional Allocation`
@@ -53,7 +53,7 @@
 ### P1 — Domain Foundations & Core Services
 
 #### `POS-001 — POS Inventory Resolution Layer`
-* **Status**: `ACTIVE — PARTIAL IMPLEMENTATION`
+* **Status**: `ACTIVE — POS-001-F1 VALIDATION`
 * **Dependencies**: `INV-002`
 * **Scope**: Connect POS to normalized inventory resolution and authoritative base-unit deduction; offline buffer remains future work unless explicitly included in its task.
 
