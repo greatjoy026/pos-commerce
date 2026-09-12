@@ -75,4 +75,9 @@ describe('POS inventory resolution', () => {
     assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1.5, price: 10 }), [product]), /Invalid POS quantity/);
     assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1, price: 10, unitMultiplier: 1.5 }), [product]), /Invalid packaging multiplier/);
   });
+
+  it('ignores custom/service lines because they do not consume inventory', () => {
+    const result = buildPosInventorySaleLines(order({ productId: 'prod-custom-1', productName: 'Custom / Service', quantity: 1, price: 20 }), [product]);
+    assert.deepEqual(result, []);
+  });
 });
