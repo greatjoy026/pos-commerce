@@ -3,6 +3,7 @@
     "module": "commonjs",
     "target": "ES2022",
     "moduleResolution": "node",
+    "resolveJsonModule": true,
     "outDir": "lib",
     "rootDir": "..",
     "strict": true,
