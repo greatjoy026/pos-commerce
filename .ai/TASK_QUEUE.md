@@ -6,7 +6,7 @@
 * **Priority**: P1
 * **Type**: POS / Inventory Integration / Trusted Backend Boundary
 * **Owner**: Architecture Supervisor (direct implementation while Gemini generation unavailable)
-* **Status**: `IMPLEMENTATION IN PROGRESS — F1 RUNNER TRIGGERED`
+* **Status**: `IMPLEMENTATION IN PROGRESS — F1 RETRY`
 * **Dependencies**: `INV-001-F1.1` — APPROVED; `INV-002` — MERGED
 * **Objective**: Connect POS sale lines to canonical SKU/variant identity and the authoritative inventory movement boundary. POS must never directly mutate inventory balances or manufacture movement records.
 * **Current Implementation**: Trusted `recordPosSale` callable and POS client adapter are present. POS-001-F1 is removing the legacy App-level stock mutation and making checkout await the authoritative inventory transaction before finalization.
