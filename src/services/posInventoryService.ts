@@ -1,6 +1,7 @@
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { app } from '../lib/firebase';
-import { DEFAULT_LOCATION_ID } from '../domain/inventory';
+import { buildPosInventorySaleLines } from '../domain/pos/inventoryResolution';
+import type { Order, Product } from '../types';
 
 export interface PosInventorySaleLine {
   sku: string;
@@ -37,28 +38,30 @@ const functions = getFunctions(app);
 const recordPosSale = httpsCallable<CallableRequest, PosInventorySaleResult>(functions, 'recordPosSale');
 
 /**
- * Resolves POS sale lines to authoritative inventory and records the SALE movement.
- *
- * The browser intentionally does not supply an inventory document ID or stock
- * balance. Location defaults to the single currently supported POS location until
- * the Location/Store domain provides an explicit terminal location binding.
+ * Resolves a finalized POS order against the canonical catalog and records its
+ * inventory SALE movements through the trusted server boundary.
  */
 export async function recordPosInventorySale(
   orderId: string,
   lines: PosInventorySaleLine[],
 ): Promise<PosInventorySaleResult> {
-  if (!orderId || !/^[A-Za-z0-9_-]+$/.test(orderId)) {
-    throw new Error('POS inventory sale requires a valid order ID');
-  }
-  if (!Array.isArray(lines) || lines.length === 0) {
-    throw new Error('POS inventory sale requires at least one line');
-  }
+  if (!orderId || !/^[A-Za-z0-9_-]+$/.test(orderId)) throw new Error('POS inventory sale requires a valid order ID');
+  if (!Array.isArray(lines) || lines.length === 0) throw new Error('POS inventory sale requires at least one line');
 
-  const normalizedLines = lines.map((line) => ({
-    ...line,
-    locationId: line.locationId?.trim() || DEFAULT_LOCATION_ID,
-  }));
-
+  const normalizedLines = lines.map(line => ({ ...line, locationId: line.locationId?.trim() || 'loc-main-store' }));
   const response = await recordPosSale({ orderId, lines: normalizedLines });
   return response.data;
+}
+
+/**
+ * Preferred POS integration entry point. It derives canonical SKU and base-unit
+ * quantities from the same Product/Variant/Packaging model used by the POS.
+ */
+export async function recordPosOrderInventorySale(
+  order: Order,
+  products: Product[],
+  locationId?: string,
+): Promise<PosInventorySaleResult> {
+  const lines = buildPosInventorySaleLines(order, products, locationId);
+  return recordPosInventorySale(order.id, lines);
 }
