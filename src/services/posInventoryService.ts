@@ -46,7 +46,8 @@ export async function recordPosInventorySale(
   lines: PosInventorySaleLine[],
 ): Promise<PosInventorySaleResult> {
   if (!orderId || !/^[A-Za-z0-9_-]+$/.test(orderId)) throw new Error('POS inventory sale requires a valid order ID');
-  if (!Array.isArray(lines) || lines.length === 0) throw new Error('POS inventory sale requires at least one line');
+  if (!Array.isArray(lines)) throw new Error('POS inventory sale requires inventory sale lines');
+  if (lines.length === 0) return { orderId, actorId: 'non-inventory-sale', lines: [] };
 
   const normalizedLines = lines.map(line => ({ ...line, locationId: line.locationId?.trim() || 'loc-main-store' }));
   const response = await recordPosSale({ orderId, lines: normalizedLines });

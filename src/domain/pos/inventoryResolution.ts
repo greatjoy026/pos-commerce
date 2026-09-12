@@ -23,6 +23,7 @@ export function buildPosInventorySaleLines(order: Order, products: Product[], lo
 
   return order.items.map((item, index) => {
     const product = products.find(p => p.id === item.productId);
+    if (!product && /custom\s*\/\s*service/i.test(item.productName)) return null;
     if (!product) throw new Error(`Product ${item.productId} could not be resolved for POS inventory`);
 
     const variant = item.variantSku ? product.variants.find(v => v.sku === item.variantSku) : undefined;
@@ -44,5 +45,5 @@ export function buildPosInventorySaleLines(order: Order, products: Product[], lo
       quantity: baseQuantity,
       operationId: `pos_${order.id}_${index + 1}`,
     };
-  });
+  }).filter((line): line is ResolvedPosInventoryLine => line !== null);
 }

@@ -19,6 +19,7 @@ import POSUnitPickerModal from './POSUnitPickerModal';
 import OpticalLaserScannerModal from './OpticalLaserScannerModal';
 import { playPosSound, dispatchReceiptEmail } from '../utils/receiptUtils';
 import { saveShiftReportToDB } from '../services/dbService';
+import { recordPosOrderInventorySale } from '../services/posInventoryService';
 
 interface POSModuleProps {
   products: Product[];
@@ -634,7 +635,7 @@ export default function POSModule({
   };
 
   // Final Order placement & Automated Email Receipt Dispatch
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (cart.length === 0) {
       triggerToast('Shopping basket is empty.', 'warn');
       return;
@@ -647,8 +648,8 @@ export default function POSModule({
 
     setIsProcessingCheckout(true);
 
-    // Realistic checkout processing
-    setTimeout(() => {
+    // Inventory must be committed authoritatively before the order is finalized.
+    try {
       const orderId = `ord-pos-${Math.floor(1000 + Math.random() * 9000)}`;
       const pointsEarned = Math.round(total / 10);
       const customerEmail = selectedCustomer?.email;
@@ -692,7 +693,10 @@ export default function POSModule({
         receiptSentAt: customerEmail ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined
       };
 
-      // Process central order record
+      // Authoritative inventory transaction must succeed before POS completion.
+      await recordPosOrderInventorySale(newOrder, products);
+
+      // Process central order projection only after inventory succeeds.
       onProcessOrder(newOrder);
 
       // Record in current shift transaction ledger
@@ -737,7 +741,13 @@ export default function POSModule({
       setShowOrderNotes(false);
       setIsTaxExempt(false);
       setIsProcessingCheckout(false);
-    }, 850);
+    } catch (error) {
+      console.error('Authoritative POS inventory sale failed:', error);
+      setIsProcessingCheckout(false);
+      const message = error instanceof Error ? error.message : 'Unable to finalize inventory for this sale.';
+      triggerToast(`Sale not completed: ${message}`, 'warn');
+      playSound('error');
+    }
   };
 
   const handleFinalizeShift = (report: ShiftReportData) => {
