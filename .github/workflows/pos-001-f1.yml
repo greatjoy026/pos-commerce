@@ -3,7 +3,8 @@ name: POS-001 F1 Integration Correction
 on:
   push:
     branches: [feat/pos-001-inventory-resolution]
-  pull_request:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
     branches: [main]
 
 permissions:
@@ -16,6 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: feat/pos-001-inventory-resolution
           fetch-depth: 0
 
       - name: Apply POS authoritative checkout integration
@@ -28,7 +30,7 @@ jobs:
           text = app.read_text()
           start = text.index('  // 6. Main Sales & Order Processor')
           end = text.index('  // 6b. Process POS Order Refund / Void', start)
-          replacement = '''  // 6. Main Sales & Order Processor\n  // Inventory has already been committed by the trusted POS inventory boundary.\n  // This handler owns only order/customer/audit projections and never mutates stock.\n  const handleProcessOrder = (newOrder: Order) => {\n    const pointsGained = Math.round(newOrder.total / 10);\n    const updatedCustomers = customers.map(c => {\n      if (c.id === newOrder.customerId || c.name === newOrder.customerName) {\n        const nextLoyaltyPoints = c.loyaltyPoints + pointsGained;\n        const updated = {\n          ...c,\n          loyaltyPoints: nextLoyaltyPoints,\n          segment: nextLoyaltyPoints > 300 ? 'VIP' as const : 'Regular' as const,\n          purchaseHistoryIds: [...(c.purchaseHistoryIds || []), newOrder.id]\n        };\n        saveCustomerToDB(updated).catch(() => {});\n        return updated;\n      }\n      return c;\n    });\n\n    const updatedOrders = [newOrder, ...orders];\n    saveOrderToDB(newOrder).catch(() => {});\n    setCustomers(updatedCustomers);\n    setOrders(updatedOrders);\n\n    const emailNote = newOrder.receiptSentToEmail ? ` Receipt automatically dispatched to ${newOrder.receiptSentToEmail}.` : '';\n    const logs = createAuditRecord(\n      'POS Transaction Processed',\n      'POS',\n      `Processed order ${newOrder.id} total $${newOrder.total}. Items: ${newOrder.items.length}. Payment Method: ${newOrder.paymentMethod}.${emailNote}`\n    );\n    saveToLocal(products, updatedCustomers, updatedOrders, logs);\n\n    if (activeCustomer && (activeCustomer.id === newOrder.customerId || activeCustomer.name === newOrder.customerName)) {\n      const updatedActive = updatedCustomers.find(c => c.id === activeCustomer.id);\n      if (updatedActive) setActiveCustomer(updatedActive);\n    }\n  };\n\n'''
+          replacement = '''  // 6. Main Sales & Order Processor\n  // Inventory has already been committed by the trusted POS inventory boundary.\n  // This handler owns only order/customer/audit projections and never mutates stock.\n  const handleProcessOrder = (newOrder: Order) => {\n    const pointsGained = Math.round(newOrder.total / 10);\n    const updatedCustomers = customers.map(c => {\n      if (c.id === newOrder.customerId || c.name === newOrder.customerName) {\n        const nextLoyaltyPoints = c.loyaltyPoints + pointsGained;\n        const updated = { ...c, loyaltyPoints: nextLoyaltyPoints, segment: nextLoyaltyPoints > 300 ? 'VIP' as const : 'Regular' as const, purchaseHistoryIds: [...(c.purchaseHistoryIds || []), newOrder.id] };\n        saveCustomerToDB(updated).catch(() => {});\n        return updated;\n      }\n      return c;\n    });\n    const updatedOrders = [newOrder, ...orders];\n    saveOrderToDB(newOrder).catch(() => {});\n    setCustomers(updatedCustomers);\n    setOrders(updatedOrders);\n    const emailNote = newOrder.receiptSentToEmail ? ` Receipt automatically dispatched to ${newOrder.receiptSentToEmail}.` : '';\n    const logs = createAuditRecord('POS Transaction Processed', 'POS', `Processed order ${newOrder.id} total $${newOrder.total}. Items: ${newOrder.items.length}. Payment Method: ${newOrder.paymentMethod}.${emailNote}`);\n    saveToLocal(products, updatedCustomers, updatedOrders, logs);\n    if (activeCustomer && (activeCustomer.id === newOrder.customerId || activeCustomer.name === newOrder.customerName)) {\n      const updatedActive = updatedCustomers.find(c => c.id === activeCustomer.id);\n      if (updatedActive) setActiveCustomer(updatedActive);\n    }\n  };\n\n'''
           app.write_text(text[:start] + replacement + text[end:])
 
           pos = Path('src/components/POSModule.tsx')
@@ -87,4 +89,4 @@ jobs:
           git add src/App.tsx src/components/POSModule.tsx src/domain/pos/inventoryResolution.ts src/services/posInventoryService.ts tests/pos-inventory-resolution.test.ts package.json
           git diff --cached --quiet && exit 0
           git commit -m "fix(POS-001-F1): remove legacy POS stock mutation"
-          git push
+          git push origin feat/pos-001-inventory-resolution
