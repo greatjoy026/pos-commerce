@@ -395,7 +395,6 @@ export default function App() {
           variants: updatedVariants, 
           salesCount: p.salesCount + totalBaseUnitsDeducted 
         };
-        saveProductToDB(updated).catch(() => {});
         return updated;
       }
       return p;
@@ -567,7 +566,6 @@ export default function App() {
           variants: updatedVariants, 
           salesCount: p.salesCount + totalBaseUnitsDeducted 
         };
-        saveProductToDB(updated).catch(() => {});
         return updated;
       }
       return p;

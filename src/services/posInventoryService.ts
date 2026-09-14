@@ -8,8 +8,6 @@
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { app } from '../lib/firebase';
 import type { RecordPosSaleRequest, RecordPosSaleResult } from '../domain/pos/inventoryResolution';
-import { executeInventoryMovement } from './inventoryService';
-import { buildInventoryRecordId } from '../domain/inventory/adapters';
 
 export type { RecordPosSaleRequest, RecordPosSaleResult, PosSaleLineRequest, PosSaleLineResult } from '../domain/pos/inventoryResolution';
 
@@ -33,47 +31,13 @@ export async function executePosSaleTransaction(
     };
   }
 
-  try {
-    const functionsInstance = getFunctions(app);
-    const callable = httpsCallable<RecordPosSaleRequest, RecordPosSaleResult>(
-      functionsInstance,
-      'recordPosSale'
-    );
+  const functionsInstance = getFunctions(app);
+  const callable = httpsCallable<RecordPosSaleRequest, RecordPosSaleResult>(
+    functionsInstance,
+    'recordPosSale'
+  );
 
-    const response = await callable(request);
-    return response.data;
-  } catch (error: any) {
-    console.warn('[POS Inventory Service] Cloud function call failed or unauthenticated, executing fallback local movement transaction:', error?.message || error);
-
-    // Local execution fallback (for offline dev/test environments without active Cloud Functions host)
-    const lineResults = [];
-    for (const line of request.lines) {
-      const invId = line.inventoryId || buildInventoryRecordId(line.sku, line.locationId);
-      const outcome = await executeInventoryMovement({
-        inventoryId: invId,
-        movementType: 'SALE',
-        quantityParam: line.quantity,
-        performedBy: 'pos-cashier',
-        referenceId: request.orderId,
-        reason: `POS Sale Order ${request.orderId}`,
-        movementId: line.operationId.startsWith('mov_') ? line.operationId : `mov_${line.operationId}`
-      });
-
-      lineResults.push({
-        operationId: line.operationId,
-        movementId: outcome.movementRecord.id,
-        inventoryId: outcome.updatedRecord.id,
-        sku: line.sku,
-        quantityBefore: outcome.movementRecord.quantityBefore,
-        quantityAfter: outcome.updatedRecord.quantityOnHand
-      });
-    }
-
-    return {
-      orderId: request.orderId,
-      success: true,
-      lineResults,
-      timestamp: new Date().toISOString()
-    };
-  }
+  const response = await callable(request);
+  return response.data;
 }
+
