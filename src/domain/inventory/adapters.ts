@@ -67,6 +67,18 @@ export function parseLegacyStock(stock: unknown, context: string): number {
 }
 
 /**
+ * Generates standard deterministic inventory record ID from SKU, location, and optional batch.
+ */
+export function buildInventoryRecordId(sku: string, locationId: string, batchNumber?: string): string {
+  const cleanSku = sku ? sku.toLowerCase().replace(/[^a-z0-9_-]/g, '_') : 'sku';
+  const cleanLoc = locationId ? locationId.trim() : DEFAULT_LOCATION_ID;
+  const cleanBatch = batchNumber ? batchNumber.toLowerCase().replace(/[^a-z0-9_-]/g, '_') : '';
+  return cleanBatch
+    ? `inv-${cleanSku}-${cleanLoc}-${cleanBatch}`
+    : `inv-${cleanSku}-${cleanLoc}`;
+}
+
+/**
  * Factory to create an authoritative InventoryRecord with strict validation.
  */
 export function createInventoryRecord(params: CreateInventoryParams): InventoryRecord {
@@ -76,11 +88,7 @@ export function createInventoryRecord(params: CreateInventoryParams): InventoryR
     : DEFAULT_LOCATION_ID;
 
   const trackingMode = params.trackingMode ?? 'QUANTITY';
-  const cleanSku = params.sku ? params.sku.toLowerCase().replace(/[^a-z0-9_-]/g, '_') : 'sku';
-  const cleanBatch = params.batchNumber ? params.batchNumber.toLowerCase().replace(/[^a-z0-9_-]/g, '_') : '';
-  const defaultId = (trackingMode === 'BATCH' && cleanBatch)
-    ? `inv-${cleanSku}-${locationId}-${cleanBatch}`
-    : `inv-${cleanSku}-${locationId}`;
+  const defaultId = buildInventoryRecordId(params.sku, locationId, params.batchNumber);
 
   const id = params.id && params.id.trim().length > 0
     ? params.id.trim()

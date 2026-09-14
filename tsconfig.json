@@ -24,7 +24,9 @@
     "noEmit": true
   },
   "exclude": [
-    "functions/**",
+    "functions",
+    "functions/*",
+    "functions/**/*",
     "node_modules",
     "dist",
     "build"

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Product, Customer, PaymentMethod, Order, Coupon, ParkedOrder, PackagingUnit, CartItem } from '../types';
 import { resolveProductSku } from '../domain/product';
+import { resolvePosCartToInventoryLines } from '../domain/pos/inventoryResolution';
+import { executePosSaleTransaction } from '../services/posInventoryService';
 import { useCurrency } from '../context/CurrencyContext';
 import { 
   ShoppingBag, Search, Plus, Minus, UserPlus, CreditCard, 
@@ -633,8 +635,8 @@ export default function POSModule({
     triggerToast(`Registered & assigned VIP customer ${newCust.name}`, 'success');
   };
 
-  // Final Order placement & Automated Email Receipt Dispatch
-  const handleCheckout = () => {
+  // Final Order placement & Automated Email Receipt Dispatch via Authoritative Inventory Boundary
+  const handleCheckout = async () => {
     if (cart.length === 0) {
       triggerToast('Shopping basket is empty.', 'warn');
       return;
@@ -647,9 +649,28 @@ export default function POSModule({
 
     setIsProcessingCheckout(true);
 
-    // Realistic checkout processing
-    setTimeout(() => {
+    try {
       const orderId = `ord-pos-${Math.floor(1000 + Math.random() * 9000)}`;
+      const activeStoreLocationId = 'loc-main-store';
+
+      // 1. Resolve cart items into canonical inventory movement lines
+      const resolution = resolvePosCartToInventoryLines(cart, orderId, activeStoreLocationId);
+      if (!resolution.isValid) {
+        triggerToast(`Checkout resolution failed: ${resolution.errors.join('; ')}`, 'warn');
+        setIsProcessingCheckout(false);
+        return;
+      }
+
+      // 2. Execute authoritative trusted inventory sale transaction
+      if (resolution.inventoryLines.length > 0) {
+        await executePosSaleTransaction({
+          orderId,
+          storeLocationId: activeStoreLocationId,
+          lines: resolution.inventoryLines
+        });
+      }
+
+      // 3. Complete order finalization (only executed if inventory transaction succeeds)
       const pointsEarned = Math.round(total / 10);
       const customerEmail = selectedCustomer?.email;
       const receiptTimestamp = new Date().toISOString();
@@ -714,7 +735,6 @@ export default function POSModule({
       playSound('success');
 
       // AUTOMATIC RECEIPT EMAIL DISPATCH:
-      // If customer has a registered email, dispatch receipt automatically!
       if (customerEmail) {
         dispatchReceiptEmail(newOrder, customerEmail, formatAmount, activeStaffName).catch(err => console.error(err));
         setLastAutoEmailSent(customerEmail);
@@ -728,7 +748,7 @@ export default function POSModule({
       setCheckoutCompletedOrder(newOrder);
       setIsReceiptModalOpen(true);
 
-      // Reset cart state
+      // Reset cart state upon successful checkout
       setCart([]);
       setAppliedCoupon(null);
       setSelectedCustomer(null);
@@ -736,8 +756,13 @@ export default function POSModule({
       setOrderNotes('');
       setShowOrderNotes(false);
       setIsTaxExempt(false);
+    } catch (err: any) {
+      console.error('[POS Checkout Error]', err);
+      const errorMessage = err?.message || 'Inventory transaction failed. Please check stock availability.';
+      triggerToast(`Checkout Failed: ${errorMessage}`, 'warn');
+    } finally {
       setIsProcessingCheckout(false);
-    }, 850);
+    }
   };
 
   const handleFinalizeShift = (report: ShiftReportData) => {

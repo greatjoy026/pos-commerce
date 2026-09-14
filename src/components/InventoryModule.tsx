@@ -2566,42 +2566,30 @@ export default function InventoryModule({
                         </div>
 
                         {/* Actions Bar */}
-                        <div className="mt-3 flex items-center gap-1.5 border-t border-slate-100 pt-2.5">
-                          {canAdjust ? (
+                        <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-2.5">
+                          {canAdjust && (
                             <button
                               type="button"
                               disabled={busy}
                               onClick={() => setReasonDialog({ product, quantity: 10 })}
-                              className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-indigo-50 px-2.5 py-2 text-xs font-bold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:opacity-50"
+                              className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:opacity-50 min-h-[38px]"
                               title="Quick Restock +10"
                             >
                               <span>+10 Restock</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDetailProduct(product);
-                                setIsDetailModalOpen(true);
-                              }}
-                              className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-slate-100 px-2.5 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-200"
-                            >
-                              <Eye className="h-3.5 w-3.5 text-slate-500" />
-                              <span>Details</span>
                             </button>
                           )}
 
                           <button
                             type="button"
                             onClick={() => openBarcode(product)}
-                            className="rounded-xl bg-slate-100 p-2 text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-800"
+                            className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl bg-slate-100 p-2 text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
                             title="Barcode Studio"
                             aria-label="Barcode Studio"
                           >
                             <Barcode className="h-4 w-4" />
                           </button>
 
-                          {/* Three Dot Action Dropdown Menu */}
+                          {/* Three Dot Action Dropdown Menu containing View Details, Edit, Transfer, Barcode & Delete */}
                           <div className="relative">
                             <button
                               type="button"
@@ -2609,15 +2597,15 @@ export default function InventoryModule({
                                 e.stopPropagation();
                                 setActiveActionMenuId(activeActionMenuId === product.id ? null : product.id);
                               }}
-                              className="rounded-xl bg-slate-100 p-2 text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-800"
-                              title="Actions"
-                              aria-label="Actions"
+                              className="flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl bg-slate-100 p-2 text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
+                              title="Product Options"
+                              aria-label="Product Options"
                             >
                               <MoreHorizontal className="h-4 w-4" />
                             </button>
 
                             {activeActionMenuId === product.id && (
-                              <div className="absolute right-0 bottom-full z-40 mb-1 w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5 animate-in fade-in duration-100 text-left">
+                              <div className="absolute right-0 bottom-full z-40 mb-1.5 w-48 rounded-2xl border border-slate-200 bg-white py-1.5 shadow-xl ring-1 ring-black/5 animate-in fade-in duration-100 text-left">
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -2625,9 +2613,9 @@ export default function InventoryModule({
                                     setDetailProduct(product);
                                     setIsDetailModalOpen(true);
                                   }}
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 text-left"
+                                  className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 text-left"
                                 >
-                                  <Eye className="h-3.5 w-3.5 text-slate-500" />
+                                  <Eye className="h-4 w-4 text-indigo-600" />
                                   <span>View Details</span>
                                 </button>
 
@@ -2638,9 +2626,9 @@ export default function InventoryModule({
                                       setActiveActionMenuId(null);
                                       openEdit(product);
                                     }}
-                                    className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 text-left"
+                                    className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 text-left"
                                   >
-                                    <Edit2 className="h-3.5 w-3.5 text-slate-500" />
+                                    <Edit2 className="h-4 w-4 text-amber-600" />
                                     <span>Edit Product</span>
                                   </button>
                                 )}
@@ -2653,9 +2641,9 @@ export default function InventoryModule({
                                       setActiveActionMenuId(null);
                                       setTransferDialog(product);
                                     }}
-                                    className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-700 text-left"
+                                    className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-700 text-left"
                                   >
-                                    <ArrowRightLeft className="h-3.5 w-3.5 text-indigo-600" />
+                                    <ArrowRightLeft className="h-4 w-4 text-indigo-600" />
                                     <span>Transfer Stock</span>
                                   </button>
                                 )}
@@ -2666,9 +2654,9 @@ export default function InventoryModule({
                                     setActiveActionMenuId(null);
                                     openBarcode(product);
                                   }}
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 text-left"
+                                  className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 text-left"
                                 >
-                                  <Barcode className="h-3.5 w-3.5 text-slate-500" />
+                                  <Barcode className="h-4 w-4 text-slate-500" />
                                   <span>Barcode Studio</span>
                                 </button>
 
@@ -2679,9 +2667,9 @@ export default function InventoryModule({
                                       setActiveActionMenuId(null);
                                       setDeleteDialog([product.id]);
                                     }}
-                                    className="mt-1 flex w-full items-center gap-2 border-t border-slate-100 px-3 pt-1.5 py-2 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50 text-left"
+                                    className="flex w-full items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50 text-left border-t border-slate-100 mt-1 pt-2"
                                   >
-                                    <Trash className="h-3.5 w-3.5 text-rose-500" />
+                                    <Trash className="h-4 w-4 text-rose-500" />
                                     <span>Delete Product</span>
                                   </button>
                                 )}

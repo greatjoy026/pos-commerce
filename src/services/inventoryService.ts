@@ -245,17 +245,21 @@ export async function executeInventoryTransfer(
 
 // Convenience Helpers
 export function recordPurchaseReceipt(params: Omit<ExecuteMovementRequest, 'movementType'>) {
-  return executeInventoryMovement({ ...params, movementType: 'PURCHASE_RECEIPT' });
+  const req: ExecuteMovementRequest = { ...params, movementType: 'PURCHASE_RECEIPT' };
+  return executeInventoryMovement(req);
 }
 
 export function recordSale(params: Omit<ExecuteMovementRequest, 'movementType'>) {
-  return executeInventoryMovement({ ...params, movementType: 'SALE' });
+  const req: ExecuteMovementRequest = { ...params, movementType: 'SALE' };
+  return executeInventoryMovement(req);
 }
 
 export function recordReturn(params: Omit<ExecuteMovementRequest, 'movementType'>) {
-  return executeInventoryMovement({ ...params, movementType: 'RETURN' });
+  const req: ExecuteMovementRequest = { ...params, movementType: 'RETURN' };
+  return executeInventoryMovement(req);
 }
 
 export function recordAdjustment(params: Omit<ExecuteMovementRequest, 'movementType'>) {
-  return executeInventoryMovement({ ...params, movementType: 'ADJUSTMENT' });
+  const req: ExecuteMovementRequest = { ...params, movementType: 'ADJUSTMENT' };
+  return executeInventoryMovement(req);
 }

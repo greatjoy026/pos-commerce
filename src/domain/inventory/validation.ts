@@ -18,7 +18,9 @@ import {
   InventoryRecord,
   InventoryTrackingMode,
   InventoryStatus,
-  calculateAvailableQuantity
+  calculateAvailableQuantity,
+  InventoryMovementRecord,
+  InventoryMovementType
 } from './types';
 import { CanonicalProduct, CanonicalVariant } from '../product/types';
 
@@ -481,5 +483,106 @@ export function assertCanonicalVariantHasNoInventoryState(variant: CanonicalVari
         { field, message: `Field '${field}' must not exist on CanonicalVariant`, code: 'INVARIANT_VIOLATION' }
       ]);
     }
+  }
+}
+
+export interface MovementValidationResult {
+  isValid: boolean;
+  errors: InventoryValidationError[];
+  record?: InventoryMovementRecord;
+}
+
+/**
+ * Validates an unknown input object against the InventoryMovementRecord contract.
+ */
+export function validateInventoryMovementRecord(input: unknown): MovementValidationResult {
+  const errors: InventoryValidationError[] = [];
+
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return {
+      isValid: false,
+      errors: [{ field: 'root', message: 'Movement record must be a non-null object', code: 'INVALID_TYPE' }]
+    };
+  }
+
+  const raw = input as Record<string, unknown>;
+
+  if (typeof raw.id !== 'string' || raw.id.trim().length === 0) {
+    errors.push({ field: 'id', message: 'Movement id is required and must be a non-empty string', code: 'REQUIRED' });
+  }
+
+  if (typeof raw.inventoryId !== 'string' || raw.inventoryId.trim().length === 0) {
+    errors.push({ field: 'inventoryId', message: 'inventoryId is required and must be a non-empty string', code: 'REQUIRED' });
+  }
+
+  if (typeof raw.sku !== 'string' || raw.sku.trim().length === 0) {
+    errors.push({ field: 'sku', message: 'sku is required and must be a non-empty string', code: 'REQUIRED' });
+  }
+
+  if (typeof raw.locationId !== 'string' || raw.locationId.trim().length === 0) {
+    errors.push({ field: 'locationId', message: 'locationId is required and must be a non-empty string', code: 'REQUIRED' });
+  }
+
+  const validMovementTypes = new Set(['PURCHASE_RECEIPT', 'SALE', 'RETURN', 'ADJUSTMENT', 'TRANSFER']);
+  if (typeof raw.movementType !== 'string' || !validMovementTypes.has(raw.movementType)) {
+    errors.push({ field: 'movementType', message: `Invalid movementType: ${String(raw.movementType)}`, code: 'INVALID_ENUM' });
+  }
+
+  if (typeof raw.quantityDelta !== 'number' || !Number.isFinite(raw.quantityDelta) || !Number.isInteger(raw.quantityDelta)) {
+    errors.push({ field: 'quantityDelta', message: 'quantityDelta must be a finite integer', code: 'INVALID_TYPE' });
+  }
+
+  if (typeof raw.quantityBefore !== 'number' || !Number.isFinite(raw.quantityBefore) || !Number.isInteger(raw.quantityBefore) || raw.quantityBefore < 0) {
+    errors.push({ field: 'quantityBefore', message: 'quantityBefore must be a non-negative integer', code: 'OUT_OF_RANGE' });
+  }
+
+  if (typeof raw.quantityAfter !== 'number' || !Number.isFinite(raw.quantityAfter) || !Number.isInteger(raw.quantityAfter) || raw.quantityAfter < 0) {
+    errors.push({ field: 'quantityAfter', message: 'quantityAfter must be a non-negative integer', code: 'OUT_OF_RANGE' });
+  }
+
+  if (typeof raw.performedBy !== 'string' || raw.performedBy.trim().length === 0) {
+    errors.push({ field: 'performedBy', message: 'performedBy is required and must be a non-empty string', code: 'REQUIRED' });
+  }
+
+  if (typeof raw.timestamp !== 'string' || raw.timestamp.trim().length === 0) {
+    errors.push({ field: 'timestamp', message: 'timestamp is required and must be a non-empty string', code: 'REQUIRED' });
+  }
+
+  if (errors.length > 0) {
+    return { isValid: false, errors };
+  }
+
+  return {
+    isValid: true,
+    errors: [],
+    record: {
+      id: (raw.id as string).trim(),
+      inventoryId: (raw.inventoryId as string).trim(),
+      sku: (raw.sku as string).trim(),
+      productId: typeof raw.productId === 'string' ? raw.productId.trim() : '',
+      variantId: typeof raw.variantId === 'string' ? raw.variantId.trim() : undefined,
+      locationId: (raw.locationId as string).trim(),
+      movementType: raw.movementType as InventoryMovementType,
+      quantityDelta: raw.quantityDelta as number,
+      quantityBefore: raw.quantityBefore as number,
+      quantityAfter: raw.quantityAfter as number,
+      referenceId: typeof raw.referenceId === 'string' ? raw.referenceId.trim() : undefined,
+      performedBy: (raw.performedBy as string).trim(),
+      timestamp: (raw.timestamp as string).trim(),
+      reason: typeof raw.reason === 'string' ? raw.reason.trim() : undefined,
+    }
+  };
+}
+
+/**
+ * Asserts that an inventory movement record satisfies all validation rules.
+ */
+export function assertValidInventoryMovementRecord(input: unknown): asserts input is InventoryMovementRecord {
+  const result = validateInventoryMovementRecord(input);
+  if (!result.isValid || !result.record) {
+    throw new InventoryDomainError(
+      `Inventory movement validation failed with ${result.errors.length} error(s): ${result.errors.map(e => `${e.field}: ${e.message}`).join(', ')}`,
+      result.errors
+    );
   }
 }
