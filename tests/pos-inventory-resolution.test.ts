@@ -184,6 +184,24 @@ describe('POS-001-F2 — Authoritative Inventory Resolution Layer', () => {
       assert.ok(res.error?.includes('[VARIANT_NOT_FOUND]'));
       assert.strictEqual(res.resolvedLine, undefined);
     });
+
+    it('rejects multi-variant product checkout without explicit variant selection and prevents silent parent-SKU fallback', () => {
+      const cartItem: CartItem = {
+        product: variantProduct,
+        quantity: 1
+      };
+
+      const res = resolvePosInventoryLine({
+        cartItem,
+        orderId: 'ord-1004',
+        lineIndex: 0,
+        storeLocationId: 'loc-main-store'
+      });
+
+      assert.strictEqual(res.isInventoryManaged, true);
+      assert.ok(res.error?.includes('[VARIANT_NOT_FOUND]'));
+      assert.strictEqual(res.resolvedLine, undefined);
+    });
   });
 
   describe('2. Multi-tier Packaging / UOM Conversion', () => {
@@ -239,21 +257,18 @@ describe('POS-001-F2 — Authoritative Inventory Resolution Layer', () => {
       assert.ok(res.error?.includes('[PACKAGING_UNIT_NOT_FOUND]'));
     });
 
-    it('rejects fractional quantity', () => {
-      const cartItem: CartItem = {
-        product: standardProduct,
-        quantity: 1.5
-      };
+    it('rejects zero, negative, or fractional quantity', () => {
+      const zeroItem: CartItem = { product: standardProduct, quantity: 0 };
+      const negativeItem: CartItem = { product: standardProduct, quantity: -2 };
+      const fractionalItem: CartItem = { product: standardProduct, quantity: 1.5 };
 
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-2003',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
+      const resZero = resolvePosInventoryLine({ cartItem: zeroItem, orderId: 'ord-2003a', lineIndex: 0, storeLocationId: 'loc-main-store' });
+      const resNeg = resolvePosInventoryLine({ cartItem: negativeItem, orderId: 'ord-2003b', lineIndex: 0, storeLocationId: 'loc-main-store' });
+      const resFrac = resolvePosInventoryLine({ cartItem: fractionalItem, orderId: 'ord-2003c', lineIndex: 0, storeLocationId: 'loc-main-store' });
 
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.ok(res.error?.includes('must be a positive integer'));
+      assert.ok(resZero.error?.includes('must be a positive integer'));
+      assert.ok(resNeg.error?.includes('must be a positive integer'));
+      assert.ok(resFrac.error?.includes('must be a positive integer'));
     });
   });
 
@@ -398,7 +413,7 @@ describe('POS-001-F2 — Authoritative Inventory Resolution Layer', () => {
     });
   });
 
-  describe('6. Shopping Basket Resolution & Idempotency', () => {
+  describe('6. Shopping Basket Resolution & Multi-Line Atomicity', () => {
     it('resolves a multi-item cart containing physical items and service items', () => {
       const cart: CartItem[] = [
         { product: standardProduct, quantity: 2 },
@@ -415,6 +430,32 @@ describe('POS-001-F2 — Authoritative Inventory Resolution Layer', () => {
       assert.strictEqual(res.inventoryLines[1].sku, 'SKU-SHIRT-S-RED');
       assert.strictEqual(res.inventoryLines[1].variantId, 'var-red-s');
       assert.strictEqual(res.inventoryLines[1].operationId, 'pos_ord-6001_1');
+    });
+
+    it('fails cart resolution when any single line item in the cart is invalid (multi-line atomicity guarantee)', () => {
+      const invalidCart: CartItem[] = [
+        { product: standardProduct, quantity: 1 },
+        { product: variantProduct, quantity: 1, selectedVariantSku: 'SKU-INVALID-VARIANT' }
+      ];
+
+      const res = resolvePosCartToInventoryLines(invalidCart, 'ord-6002', 'loc-main-store');
+
+      assert.strictEqual(res.isValid, false);
+      assert.ok(res.errors.length > 0);
+      assert.ok(res.errors[0].includes('[VARIANT_NOT_FOUND]'));
+    });
+
+    it('attaches canonical productId and variantId for server binding validation', () => {
+      const cart: CartItem[] = [
+        { product: variantProduct, quantity: 1, selectedVariantSku: 'SKU-SHIRT-S-RED' }
+      ];
+
+      const res = resolvePosCartToInventoryLines(cart, 'ord-6003', 'loc-main-store');
+
+      assert.strictEqual(res.isValid, true);
+      assert.strictEqual(res.inventoryLines[0].productId, 'prod-shirt-01');
+      assert.strictEqual(res.inventoryLines[0].variantId, 'var-red-s');
+      assert.strictEqual(res.inventoryLines[0].sku, 'SKU-SHIRT-S-RED');
     });
   });
 });

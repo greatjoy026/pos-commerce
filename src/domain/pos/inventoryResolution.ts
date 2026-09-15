@@ -197,14 +197,13 @@ function resolveCanonicalPackagingMultiplier(product: Product, cartItem: CartIte
       } else {
         return { multiplier: 1, error: `[PACKAGING_UNIT_INVALID] Packaging unit "${matchedUnit.unitName}" for product "${product.name}" has an invalid multiplier (${matchedUnit.multiplier})` };
       }
-    } else if (catalogUnits.length > 0) {
+    } else {
       return { multiplier: 1, error: `[PACKAGING_UNIT_NOT_FOUND] Selected packaging unit "${requestedUnitId || requestedUnitName}" for product "${product.name}" was not found in canonical catalog` };
     }
   }
 
-  // Fall back to item unitMultiplier if explicitly set, else 1
-  const fallbackMultiplier = cartItem.unitMultiplier ?? cartItem.selectedPackagingUnit?.multiplier ?? 1;
-  return { multiplier: fallbackMultiplier };
+  // Single base-unit selling (no packaging unit requested)
+  return { multiplier: 1 };
 }
 
 /**
@@ -253,12 +252,10 @@ export function resolvePosInventoryLine(params: PosLineResolutionParams): PosLin
       };
     }
   } else if (catalogVariants.length > 0) {
-    const defaultVariant = catalogVariants.find(v => (v as any).isDefault || v.sku === product.sku);
+    const defaultVariant = catalogVariants.find(v => (v as any).isDefault);
     if (defaultVariant && defaultVariant.sku) {
       resolvedSku = defaultVariant.sku.trim();
       variantId = (defaultVariant as any).id || defaultVariant.sku.trim();
-    } else if (product.sku) {
-      resolvedSku = product.sku.trim();
     } else {
       return {
         isInventoryManaged: true,

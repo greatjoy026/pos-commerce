@@ -653,7 +653,7 @@ export default function POSModule({
 
     try {
       const orderId = `ord-pos-${Math.floor(1000 + Math.random() * 9000)}`;
-      const activeStoreLocationId = storeLocationId || 'loc-main-store';
+      const activeStoreLocationId = storeLocationId?.trim();
 
       // 1. Resolve cart items into canonical inventory movement lines
       const resolution = resolvePosCartToInventoryLines(cart, orderId, activeStoreLocationId);
@@ -665,9 +665,10 @@ export default function POSModule({
 
       // 2. Execute authoritative trusted inventory sale transaction
       if (resolution.inventoryLines.length > 0) {
+        const targetStoreLocationId = activeStoreLocationId || resolution.inventoryLines[0]?.locationId || 'loc-store';
         await executePosSaleTransaction({
           orderId,
-          storeLocationId: activeStoreLocationId,
+          storeLocationId: targetStoreLocationId,
           lines: resolution.inventoryLines
         });
       }

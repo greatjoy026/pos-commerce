@@ -865,6 +865,7 @@ export default function App() {
                     onProcessOrder={handleProcessOrder}
                     onRefundOrder={handleRefundOrder}
                     activeStaffName={activeStaff.name}
+                    storeLocationId="loc-main-store"
                   />
                 )}
 
