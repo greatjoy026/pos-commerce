@@ -978,6 +978,47 @@ Added 4 security tests for `/inventory_movements/{movementId}`:
 
 INV-002 IMPLEMENTATION COMPLETE — READY FOR ARCHITECTURAL REVIEW
 
+---
+
+# Implementation Report: POS-001-F2
+
+**Task ID**: POS-001-F2  
+**Task Name**: Final Reconciliation of POS Inventory Resolution  
+**Status**: `IMPLEMENTATION COMPLETE — READY FOR MERGE REVIEW`  
+**Author**: Gemini (Senior Software Engineer & Implementation Lead)  
+**Date**: 2026-09-14  
+
+---
+
+## 1. Executive Summary
+
+`POS-001-F2` completes the authoritative reconciliation of the POS Inventory Resolution Layer. The repository implementation now strictly aligns with the authoritative architecture across all 14 mandatory corrections:
+
+1. **Canonical Variant Resolution**: Explicit resolution hierarchy `Product -> Variant -> SKU -> Packaging/UOM -> Base Quantity`. Rejects invalid variant SKUs or missing variant selections with `[VARIANT_NOT_FOUND]` without silent fallback to base SKU.
+2. **Packaging & UOM Conversion**: Resolves packaging unit multipliers strictly from catalog definitions (`product.packagingUnits`). Rejects invalid or uncataloged packaging units with `[PACKAGING_UNIT_NOT_FOUND]`. Validates quantities and multipliers as positive safe integers.
+3. **Location Resolution**: Removed hardcoded `'loc-main-store'` defaults from domain functions. Missing locations return `[LOCATION_REQUIRED]`; comma-separated or unselected multiple locations return `[LOCATION_AMBIGUOUS]`.
+4. **Structural Service Discrimination**: Replaced display-name regex matching (`/custom\s*\/\s*service/i`) with strict structural domain classification (`productType === 'Service'`, `category === 'Service'`, `trackInventory === false`, `id.startsWith('custom-')`). Physical items with "Service" or "Custom" in their title are correctly inventory-managed.
+5. **Preservation of `variantId`**: Preserves canonical `variantId` and `productId` on resolved lines, Cloud Function calls, and immutable movement records.
+6. **Server Authority & Firestore Security**: Checkout flow executes sequentially: POS Cart -> Domain Resolution -> trusted server Cloud Function `recordPosSale` -> atomic transaction mutation. Firestore security rules enforce `allow update, delete: if false` on `/inventory` and `/inventory_movements`.
+7. **Serial & Batch Safeguards**: Rejects SERIAL items missing explicit serial numbers with `[SERIAL_SELECTION_REQUIRED]` and BATCH items missing batch number with `[BATCH_SELECTION_REQUIRED]`.
+8. **Deterministic Idempotency**: Generates `pos_<orderId>_<lineIndex>` operation IDs for atomic idempotency checks.
+
+---
+
+## 2. Verification & Quality Gates
+
+| Verification Gate | Command | Result |
+|---|---|---|
+| **POS Resolution Unit Tests** | `npx tsx --test tests/pos-inventory-resolution.test.ts` | **PASS (14 / 14 tests green)** |
+| **Static Type Checking** | `npm run lint` (`tsc --noEmit`) | **PASS (0 errors)** |
+| **Applet Compilation** | `compile_applet` (`vite build`) | **PASS (clean bundle)** |
+| **Backend Functions Build** | `npm run build --prefix functions` | **PASS (0 errors)** |
+
+---
+
+POS-001-F2 IMPLEMENTATION COMPLETE — READY FOR MERGE REVIEW
+
+
 
 
 

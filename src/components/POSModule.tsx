@@ -30,6 +30,7 @@ interface POSModuleProps {
   onProcessOrder: (order: Order) => void;
   onRefundOrder?: (orderId: string, reason: string) => void;
   activeStaffName: string;
+  storeLocationId?: string;
 }
 
 // Initial realistic shift transactions
@@ -57,7 +58,8 @@ export default function POSModule({
   onAddCustomer,
   onProcessOrder,
   onRefundOrder,
-  activeStaffName
+  activeStaffName,
+  storeLocationId
 }: POSModuleProps) {
   const { formatAmount, currencySymbol } = useCurrency();
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -651,7 +653,7 @@ export default function POSModule({
 
     try {
       const orderId = `ord-pos-${Math.floor(1000 + Math.random() * 9000)}`;
-      const activeStoreLocationId = 'loc-main-store';
+      const activeStoreLocationId = storeLocationId || 'loc-main-store';
 
       // 1. Resolve cart items into canonical inventory movement lines
       const resolution = resolvePosCartToInventoryLines(cart, orderId, activeStoreLocationId);

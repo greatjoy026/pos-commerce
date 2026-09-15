@@ -2,6 +2,25 @@
 
 ## 1. Active Tasks
 
+### `ECOM-001 — Shared Catalog Contract`
+* **Priority**: P1
+* **Type**: Domain Integration / E-Commerce Storefront
+* **Owner**: Architecture Supervisor
+* **Status**: `QUEUED — PENDING ECOM-001 IMPLEMENTATION`
+* **Dependencies**: `PROD-001-F2.1`, `INV-002`, `POS-001-F2`
+
+---
+
+## 2. Completed Tasks
+
+### `POS-001-F2 — Authoritative POS Inventory Resolution Layer`
+* **Priority**: P0/P1 architectural reconciliation
+* **Type**: Domain Service / POS Inventory Resolution
+* **Owner**: Senior Software Engineer & Implementation Lead
+* **Status**: `IMPLEMENTATION COMPLETE — READY FOR MERGE REVIEW`
+* **Dependencies**: `INV-002`, `INV-002-F1`
+* **Objective**: Full reconciliation of POS-001 inventory resolution according to 14 mandatory corrections: canonical variant resolution (no silent fallback), packaging UOM lookup, strict location handling (`LOCATION_REQUIRED`, `LOCATION_AMBIGUOUS`), structural service discrimination (no display name regex), batch/serial lifecycle restrictions, variantId preservation, server-authoritative `recordPosSale` callable execution, and comprehensive test suite validation.
+
 ### `INV-002-F1 — Inventory Movement Integrity & Trusted Mutation Boundary`
 * **Priority**: P0/P1 architectural correction
 * **Type**: Security / Domain Service / Trusted Backend Boundary

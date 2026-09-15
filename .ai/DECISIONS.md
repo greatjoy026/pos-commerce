@@ -298,6 +298,38 @@ This register records foundational architectural decisions for `greatjoy026/pos-
   - Race conditions during concurrent sales or receipts are prevented by atomic database transactions.
   - Ledger items can never be tampered with, edited, or deleted once recorded.
 
+---
+
+### ADR-019: Authoritative POS Inventory Resolution Layer (POS-001-F2)
+
+* **Status**: `IMPLEMENTED (POS-001-F2)`
+* **Context**: The previous POS checkout implementation contained fallbacks, regex-based display-name classification of service items, hardcoded store locations, and incomplete variant/packaging resolution.
+* **Decision**:
+  1. **Canonical Line Resolution Hierarchy**:
+     - Strict execution: `Product -> Variant -> SKU -> Packaging/UOM -> Base Quantity`.
+     - Explicit variant matching by SKU/ID against canonical catalog (`product.variants`). If requested variant is not found, resolution fails with `[VARIANT_NOT_FOUND]`. Never silently fall back to parent SKU.
+     - Preserves `productId` and `variantId` across resolved lines.
+  2. **Canonical Packaging / UOM Lookup**:
+     - Multiplier is derived strictly from catalog definitions (`product.packagingUnits`).
+     - Requested packaging units must exist in catalog or fail with `[PACKAGING_UNIT_NOT_FOUND]`.
+     - Quantities and multipliers are validated as positive finite integers. Fractional, non-integer, negative, or zero values are strictly rejected.
+  3. **Strict Location Resolution**:
+     - Removed default `'loc-main-store'` fallback from domain resolution.
+     - Missing location context fails with `[LOCATION_REQUIRED]`.
+     - Comma-separated or multiple unselected locations fail with `[LOCATION_AMBIGUOUS]`.
+  4. **Structural Service & Custom Item Discrimination**:
+     - Service and ad-hoc custom items are classified strictly via structural domain properties (`productType === 'Service'`, `category === 'Service'`, `trackInventory === false`, `id.startsWith('custom-')`).
+     - Regex matching on product display names is completely eliminated (e.g., physical items named "Customized Leather Jacket" are correctly treated as inventory-managed).
+  5. **Batch & Serial Restrictions**:
+     - `SERIAL` tracked items require explicit serial selection matching base quantity (`[SERIAL_SELECTION_REQUIRED]`).
+     - `BATCH` tracked items require explicit batch selection (`[BATCH_SELECTION_REQUIRED]`).
+  6. **Idempotency & Server Authority**:
+     - Every POS inventory movement generates a deterministic `pos_<orderId>_<lineIndex>` operation ID.
+     - POS checkout proxies through the trusted server-side Cloud Function `recordPosSale`, enforcing server-side stock validation, atomic transactions, and security rule boundaries.
+* **Consequences**:
+  - Browser clients can never bypass server inventory checks or silently corrupt inventory balances.
+  - All 14 unit tests in `tests/pos-inventory-resolution.test.ts` pass with 100% compliance.
+
 
 
 

@@ -162,6 +162,13 @@ export const recordPosSale = onCall<RecordPosSaleRequest>(async request => {
       const inventory = parseInventory(invSnap.data(), invSnap.id);
       assertSerialMovementSupported(inventory);
 
+      if (line.productId && line.productId !== inventory.productId) {
+        throw new HttpsError('failed-precondition', `Product ID mismatch for SKU ${line.sku}: requested ${line.productId}, record has ${inventory.productId}`);
+      }
+      if (line.variantId && inventory.variantId && line.variantId !== inventory.variantId) {
+        throw new HttpsError('failed-precondition', `Variant ID mismatch for SKU ${line.sku}: requested ${line.variantId}, record has ${inventory.variantId}`);
+      }
+
       // Check Idempotency: If operationId movement already exists
       if (movSnap.exists) {
         const existingMov = movSnap.data() as InventoryMovementRecord;
@@ -190,6 +197,7 @@ export const recordPosSale = onCall<RecordPosSaleRequest>(async request => {
         id: movementRef.id,
         inventoryId: inventory.id,
         productId: inventory.productId,
+        variantId: line.variantId || inventory.variantId,
         sku: inventory.sku,
         locationId: inventory.locationId,
         movementType: 'SALE',

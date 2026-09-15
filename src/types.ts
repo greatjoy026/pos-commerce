@@ -93,6 +93,7 @@ export interface RoleConfig {
 }
 
 export interface ProductVariant {
+  id?: string;
   sku: string;
   size?: string;
   color?: string;
