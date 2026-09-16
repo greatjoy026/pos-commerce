@@ -1,43 +1,47 @@
-/**
- * Authoritative POS Inventory Service (POS-001)
- *
- * Client-side transaction adapter that proxies POS sales requests to the
- * server-side trusted Cloud Function `recordPosSale`.
- */
-
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { app } from '../lib/firebase';
-import type { RecordPosSaleRequest, RecordPosSaleResult } from '../domain/pos/inventoryResolution';
+import { buildPosInventorySaleLines, type ResolvedPosInventoryLine } from '../domain/pos/inventoryResolution';
+import type { Order, Product } from '../types';
 
-export type { RecordPosSaleRequest, RecordPosSaleResult, PosSaleLineRequest, PosSaleLineResult } from '../domain/pos/inventoryResolution';
+export interface PosInventorySaleLine extends ResolvedPosInventoryLine {}
 
-/**
- * Executes a multi-line POS inventory sale transaction through the server-side trusted boundary.
- */
-export async function executePosSaleTransaction(
-  request: RecordPosSaleRequest
-): Promise<RecordPosSaleResult> {
-  if (!request || !request.orderId || !Array.isArray(request.lines)) {
-    throw new Error('Invalid POS sale request structure');
-  }
+export interface PosInventorySaleResultLine {
+  operationId: string;
+  inventoryId: string;
+  sku: string;
+  quantity: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  availableQuantityAfter: number;
+  movementId: string;
+}
 
-  // If basket contains only custom / service items (0 physical inventory lines)
-  if (request.lines.length === 0) {
-    return {
-      orderId: request.orderId,
-      success: true,
-      lineResults: [],
-      timestamp: new Date().toISOString()
-    };
-  }
+export interface PosInventorySaleResult {
+  orderId: string;
+  actorId: string;
+  lines: PosInventorySaleResultLine[];
+}
 
-  const functionsInstance = getFunctions(app);
-  const callable = httpsCallable<RecordPosSaleRequest, RecordPosSaleResult>(
-    functionsInstance,
-    'recordPosSale'
-  );
+interface CallableRequest {
+  orderId: string;
+  lines: PosInventorySaleLine[];
+}
 
-  const response = await callable(request);
+const functions = getFunctions(app);
+const recordPosSale = httpsCallable<CallableRequest, PosInventorySaleResult>(functions, 'recordPosSale');
+
+/** Calls the trusted POS inventory boundary. The client never supplies a location or inventory document ID. */
+export async function recordPosInventorySale(orderId: string, lines: PosInventorySaleLine[]): Promise<PosInventorySaleResult> {
+  if (!orderId || !/^[A-Za-z0-9_-]+$/.test(orderId)) throw new Error('POS inventory sale requires a valid order ID');
+  if (!Array.isArray(lines)) throw new Error('POS inventory sale requires inventory sale lines');
+  if (lines.length === 0) return { orderId, actorId: 'non-inventory-sale', lines: [] };
+
+  const response = await recordPosSale({ orderId, lines });
   return response.data;
 }
 
+/** Preferred POS integration entry point: canonical SKU/variant + catalog packaging conversion. */
+export async function recordPosOrderInventorySale(order: Order, products: Product[]): Promise<PosInventorySaleResult> {
+  const lines = buildPosInventorySaleLines(order, products);
+  return recordPosInventorySale(order.id, lines);
+}

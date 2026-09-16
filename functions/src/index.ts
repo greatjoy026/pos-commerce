@@ -7,4 +7,3 @@ export {
 } from './inventoryMovements';
 
 export { recordPosSale } from './posInventory';
-
