@@ -2,7 +2,9 @@ name: INV-002 Validation
 
 on:
   push:
-    branches: [feat/inv-002-ledger-movements]
+    branches:
+      - feat/inv-002-ledger-movements
+      - feat/pos-001-inventory-resolution
   pull_request:
     branches: [main]
 

@@ -1,257 +1,131 @@
 import { getApp, getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type DocumentData } from 'firebase-admin/firestore';
+import { getFirestore, type DocumentData, type DocumentReference } from 'firebase-admin/firestore';
 import { onCall, HttpsError, type CallableRequest } from 'firebase-functions/v2/https';
 import { calculateAvailableQuantity, type InventoryMovementRecord, type InventoryRecord } from '../../src/domain/inventory/types';
 import { validateInventoryRecord } from '../../src/domain/inventory/validation';
-import { buildInventoryRecordId } from '../../src/domain/inventory/adapters';
-import type { RecordPosSaleRequest, RecordPosSaleResult, PosSaleLineResult } from '../../src/domain/pos/inventoryResolution';
 
 const adminApp = getApps().length > 0 ? getApp() : initializeApp();
 const db = getFirestore(adminApp, process.env.FIRESTORE_DATABASE_ID || 'ai-studio-nexusposcommerce-d2deaf29-88c9-4563-a26f-04f5e6504d77');
-const MOVEMENTS = 'inventory_movements';
 const INVENTORY = 'inventory';
+const MOVEMENTS = 'inventory_movements';
 const OPERATION_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
+const POS_ROLES = new Set(['Super Admin', 'Business Owner', 'Store Manager', 'Admin', 'Manager', 'Cashier', 'Sales Associate']);
 
-const POS_STAFF_ROLES = new Set([
-  'Super Admin', 'Business Owner', 'Store Manager', 'Admin', 'Manager',
-  'Inventory Manager', 'Warehouse Manager', 'Purchasing Officer', 'Cashier',
-  'Sales Associate', 'Sales Manager'
-]);
+interface PosSaleLine { sku: string; productId: string; variantId?: string; quantity: number; operationId: string; }
+interface PosSaleRequest { orderId: string; lines: PosSaleLine[]; }
+interface PosSaleLineResult { operationId: string; inventoryId: string; sku: string; quantity: number; quantityBefore: number; quantityAfter: number; availableQuantityAfter: number; movementId: string; }
 
-function fail(message: string, code: 'invalid-argument' | 'failed-precondition' | 'not-found' = 'invalid-argument'): never {
-  throw new HttpsError(code, message);
-}
+function fail(message: string, code: 'invalid-argument' | 'failed-precondition' = 'invalid-argument'): never { throw new HttpsError(code, message); }
+function assertString(value: unknown, field: string, max = 128): asserts value is string { if (typeof value !== 'string' || value.trim().length === 0 || value.length > max) fail(`Invalid ${field}`); }
+function assertPositiveInteger(value: unknown, field: string): asserts value is number { if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) fail(`${field} must be a positive integer`); }
+function assertOperationId(value: unknown): asserts value is string { assertString(value, 'operationId', 100); if (!OPERATION_ID_PATTERN.test(value)) fail('Invalid operationId'); }
+function assertOrderId(value: unknown): asserts value is string { assertString(value, 'orderId', 128); if (!/^[A-Za-z0-9_-]+$/.test(value)) fail('Invalid orderId'); }
 
-function assertPositiveInteger(value: unknown, field: string): asserts value is number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
-    fail(`${field} must be a positive integer`);
-  }
-}
-
-function assertString(value: unknown, field: string, max = 128): asserts value is string {
-  if (typeof value !== 'string' || value.trim().length === 0 || value.length > max) {
-    fail(`Invalid ${field}`);
-  }
-}
-
-function assertOperationId(value: unknown): asserts value is string {
-  assertString(value, 'operationId', 100);
-  if (!OPERATION_ID_PATTERN.test(value)) {
-    fail('Invalid operationId format');
-  }
-}
-
-async function getPosStaffActor(request: CallableRequest<unknown>): Promise<string> {
+async function getStaffActor(request: CallableRequest<unknown>): Promise<string> {
   const auth = request.auth;
-  if (!auth) {
-    throw new HttpsError('unauthenticated', 'An authenticated staff actor is required for POS sale processing');
-  }
-  if (auth.token.tenantId !== undefined && auth.token.tenantId !== 'nexus-enterprise') {
-    throw new HttpsError('permission-denied', 'Invalid enterprise scope');
-  }
-  if (auth.token.admin === true || auth.token.isSuperAdmin === true || (typeof auth.token.role === 'string' && POS_STAFF_ROLES.has(auth.token.role))) {
-    return auth.uid;
-  }
+  if (!auth) throw new HttpsError('unauthenticated', 'An authenticated POS staff actor is required');
+  if (auth.token.tenantId !== undefined && auth.token.tenantId !== 'nexus-enterprise') throw new HttpsError('permission-denied', 'Invalid enterprise scope');
+  if (auth.token.admin === true || auth.token.isSuperAdmin === true || (typeof auth.token.role === 'string' && POS_ROLES.has(auth.token.role))) return auth.uid;
   const staff = await db.doc(`staff/${auth.uid}`).get();
   const role = staff.exists ? staff.data()?.role : undefined;
-  if (typeof role !== 'string' || !POS_STAFF_ROLES.has(role)) {
-    throw new HttpsError('permission-denied', 'POS staff authorization required');
-  }
+  if (typeof role !== 'string' || !POS_ROLES.has(role)) throw new HttpsError('permission-denied', 'POS staff authorization required');
   return auth.uid;
-}
-
-function movementId(operationId: string): string {
-  return `mov_${operationId}`;
 }
 
 function parseInventory(data: DocumentData | undefined, id: string): InventoryRecord {
   const result = validateInventoryRecord({ ...(data ?? {}), id });
-  if (!result.isValid || !result.record) {
-    throw new HttpsError('failed-precondition', `Stored inventory record ${id} is invalid`);
-  }
+  if (!result.isValid || !result.record) throw new HttpsError('failed-precondition', `Stored inventory record ${id} is invalid`);
   return result.record;
 }
-
-function assertAvailable(record: InventoryRecord, quantity: number): void {
-  const available = calculateAvailableQuantity(record);
-  if (quantity > available) {
-    throw new HttpsError('failed-precondition', `Insufficient stock for SKU ${record.sku}: only ${available} unit(s) available, requested ${quantity}`);
-  }
+function movementId(operationId: string): string { return `mov_${operationId}`; }
+function sameMovement(existing: InventoryMovementRecord, expected: InventoryMovementRecord): boolean {
+  return existing.inventoryId === expected.inventoryId && existing.movementType === expected.movementType && existing.quantityDelta === expected.quantityDelta && existing.performedBy === expected.performedBy && existing.referenceId === expected.referenceId;
 }
 
-function assertSerialMovementSupported(record: InventoryRecord): void {
-  if (record.trackingMode === 'SERIAL') {
-    throw new HttpsError('failed-precondition', 'SERIAL inventory mutations require serial lifecycle engine');
-  }
-}
-
-/**
- * Executes an atomic multi-line POS sale transaction.
- */
-export const recordPosSale = onCall<RecordPosSaleRequest>(async request => {
-  const actor = await getPosStaffActor(request);
+/** Trusted POS sale boundary. Location and inventory document identity are resolved only from server-side inventory state. */
+export const recordPosSale = onCall<PosSaleRequest>(async (request) => {
+  const actor = await getStaffActor(request);
   const data = request.data;
+  if (!data || typeof data !== 'object') fail('Invalid POS sale request');
+  assertOrderId(data.orderId);
+  if (!Array.isArray(data.lines) || data.lines.length === 0 || data.lines.length > 100) fail('POS sale must contain between 1 and 100 lines');
 
-  if (!data || typeof data !== 'object') {
-    fail('Invalid POS sale request payload');
-  }
-
-  assertString(data.orderId, 'orderId');
-  assertString(data.storeLocationId, 'storeLocationId');
-  if (!Array.isArray(data.lines)) {
-    fail('lines must be an array of POS sale items');
-  }
-
-  // If no physical inventory lines (e.g., custom/service items only), return early success
-  if (data.lines.length === 0) {
-    return {
-      orderId: data.orderId,
-      success: true,
-      lineResults: [],
-      timestamp: new Date().toISOString()
-    };
-  }
-
-  // Validate all lines prior to entering database transaction
-  data.lines.forEach((line, idx) => {
-    assertString(line.sku, `lines[${idx}].sku`);
-    assertString(line.locationId, `lines[${idx}].locationId`);
-    assertPositiveInteger(line.quantity, `lines[${idx}].quantity`);
+  const lines = data.lines.map((line, index) => {
+    if (!line || typeof line !== 'object') fail(`Invalid sale line ${index}`);
+    assertString(line.sku, `lines[${index}].sku`, 128);
+    assertString(line.productId, `lines[${index}].productId`, 128);
+    assertPositiveInteger(line.quantity, `lines[${index}].quantity`);
     assertOperationId(line.operationId);
+    if (line.variantId !== undefined) assertString(line.variantId, `lines[${index}].variantId`, 128);
+    return line as PosSaleLine;
   });
 
-  return db.runTransaction(async tx => {
-    const lineResults: PosSaleLineResult[] = [];
+  const operationIds = new Set<string>();
+  for (const line of lines) {
+    if (operationIds.has(line.operationId)) fail('Duplicate operationId in POS sale');
+    operationIds.add(line.operationId);
+  }
 
-    // Phase 1: Fetch all target inventory records & existing movement docs
-    const reads = await Promise.all(data.lines.map(async line => {
-      const invId = line.inventoryId || buildInventoryRecordId(line.sku, line.locationId);
-      const inventoryRef = db.doc(`${INVENTORY}/${invId}`);
+  return db.runTransaction(async (tx) => {
+    type ResolvedLine = { line: PosSaleLine; inventory: InventoryRecord; inventoryRef: DocumentReference; movementRef: DocumentReference; existingMovement?: InventoryMovementRecord; };
+    const resolved: ResolvedLine[] = [];
+
+    // READ PHASE: complete all Firestore reads before transaction writes.
+    for (const line of lines) {
+      const inventoryQuery = db.collection(INVENTORY).where('sku', '==', line.sku).limit(2);
+      const inventorySnap = await tx.get(inventoryQuery);
+      if (inventorySnap.empty) throw new HttpsError('not-found', `No inventory record exists for SKU ${line.sku}`);
+      if (inventorySnap.size !== 1) throw new HttpsError('failed-precondition', `Inventory resolution for SKU ${line.sku} is ambiguous across locations`);
+
+      const inventorySnapDoc = inventorySnap.docs[0];
+      const inventory = parseInventory(inventorySnapDoc.data(), inventorySnapDoc.id);
+      const requestedVariantId = line.variantId || undefined;
+      const storedVariantId = inventory.variantId || undefined;
+      if (inventory.productId !== line.productId) throw new HttpsError('failed-precondition', `SKU ${line.sku} is not bound to the requested product`);
+      if (storedVariantId !== requestedVariantId) throw new HttpsError('failed-precondition', `SKU ${line.sku} is not bound to the requested variant`);
+      if (inventory.status !== 'ACTIVE') throw new HttpsError('failed-precondition', `Inventory for SKU ${line.sku} is inactive`);
+      if (inventory.trackingMode === 'SERIAL' || inventory.trackingMode === 'BATCH') throw new HttpsError('failed-precondition', `${inventory.trackingMode} inventory requires its dedicated POS lifecycle engine`);
+
       const movementRef = db.doc(`${MOVEMENTS}/${movementId(line.operationId)}`);
-
-      const [invSnap, movSnap] = await Promise.all([
-        tx.get(inventoryRef),
-        tx.get(movementRef)
-      ]);
-
-      return {
-        line,
-        inventoryRef,
-        movementRef,
-        invSnap,
-        movSnap
-      };
-    }));
-
-    // Phase 2: Validate state & construct mutations
-    const updates: Array<{
-      inventoryRef: any;
-      updatedInventory: InventoryRecord;
-      movementRef: any;
-      movement: InventoryMovementRecord;
-      lineResult: PosSaleLineResult;
-    }> = [];
-
-    for (const item of reads) {
-      const { line, inventoryRef, movementRef, invSnap, movSnap } = item;
-
-      if (!invSnap.exists) {
-        throw new HttpsError('not-found', `Inventory record not found for SKU ${line.sku} at location ${line.locationId}`);
-      }
-
-      const inventory = parseInventory(invSnap.data(), invSnap.id);
-      assertSerialMovementSupported(inventory);
-
-      if (line.productId && line.productId !== inventory.productId) {
-        throw new HttpsError('failed-precondition', `Product ID mismatch for SKU ${line.sku}: requested ${line.productId}, record has ${inventory.productId}`);
-      }
-      if (line.variantId && inventory.variantId && line.variantId !== inventory.variantId) {
-        throw new HttpsError('failed-precondition', `Variant ID mismatch for SKU ${line.sku}: requested ${line.variantId}, record has ${inventory.variantId}`);
-      }
-
-      // Check Idempotency: If operationId movement already exists
-      if (movSnap.exists) {
-        const existingMov = movSnap.data() as InventoryMovementRecord;
-        if (existingMov.referenceId === data.orderId && existingMov.quantityDelta === -line.quantity) {
-          lineResults.push({
-            operationId: line.operationId,
-            movementId: existingMov.id,
-            inventoryId: inventory.id,
-            sku: inventory.sku,
-            quantityBefore: existingMov.quantityBefore,
-            quantityAfter: existingMov.quantityAfter
-          });
-          continue; // Already processed idempotently
-        } else {
-          throw new HttpsError('already-exists', `Operation ID ${line.operationId} was previously used for a different movement`);
-        }
-      }
-
-      // Assert stock availability
-      assertAvailable(inventory, line.quantity);
-
-      const quantityAfter = inventory.quantityOnHand - line.quantity;
-      const now = new Date().toISOString();
-
-      const movement: InventoryMovementRecord = {
-        id: movementRef.id,
-        inventoryId: inventory.id,
-        productId: inventory.productId,
-        variantId: line.variantId || inventory.variantId,
-        sku: inventory.sku,
-        locationId: inventory.locationId,
-        movementType: 'SALE',
-        quantityDelta: -line.quantity,
-        quantityBefore: inventory.quantityOnHand,
-        quantityAfter,
-        referenceId: data.orderId,
-        performedBy: actor,
-        timestamp: now,
-        reason: `POS Sale Order ${data.orderId}`
-      };
-
-      const updatedInventory: InventoryRecord = {
-        ...inventory,
-        quantityOnHand: quantityAfter,
-        updatedAt: now
-      };
-
-      const validation = validateInventoryRecord(updatedInventory);
-      if (!validation.isValid) {
-        throw new HttpsError('failed-precondition', `POS sale for SKU ${line.sku} violates inventory invariants: ${validation.errors.map(e => e.message).join(', ')}`);
-      }
-
-      updates.push({
-        inventoryRef,
-        updatedInventory,
-        movementRef,
-        movement,
-        lineResult: {
-          operationId: line.operationId,
-          movementId: movement.id,
-          inventoryId: inventory.id,
-          sku: inventory.sku,
-          quantityBefore: inventory.quantityOnHand,
-          quantityAfter
-        }
-      });
+      const existingSnap = await tx.get(movementRef);
+      const existingMovement = existingSnap.exists ? existingSnap.data() as InventoryMovementRecord : undefined;
+      resolved.push({ line, inventory, inventoryRef: inventorySnapDoc.ref, movementRef, existingMovement });
     }
 
-    // Phase 3: Commit atomic updates to Firestore
-    for (const u of updates) {
-      tx.update(u.inventoryRef, {
-        quantityOnHand: u.updatedInventory.quantityOnHand,
-        updatedAt: u.updatedInventory.updatedAt
-      });
-      tx.create(u.movementRef, u.movement);
-      lineResults.push(u.lineResult);
+    const inventoryIds = new Set<string>();
+    for (const item of resolved) {
+      if (inventoryIds.has(item.inventory.id)) throw new HttpsError('invalid-argument', `Duplicate inventory item in POS sale for SKU ${item.inventory.sku}`);
+      inventoryIds.add(item.inventory.id);
     }
 
-    return {
-      orderId: data.orderId,
-      success: true,
-      lineResults,
-      timestamp: new Date().toISOString()
-    };
+    const results: PosSaleLineResult[] = [];
+    // WRITE PHASE: all balance and immutable movement changes are atomic.
+    for (const item of resolved) {
+      const { line, inventory, inventoryRef, movementRef, existingMovement } = item;
+      if (inventory.trackingMode === 'NONE') {
+        results.push({ operationId: line.operationId, inventoryId: inventory.id, sku: inventory.sku, quantity: 0, quantityBefore: inventory.quantityOnHand, quantityAfter: inventory.quantityOnHand, availableQuantityAfter: calculateAvailableQuantity(inventory), movementId: '' });
+        continue;
+      }
+
+      const expectedAfter = inventory.quantityOnHand - line.quantity;
+      const expectedMovement: InventoryMovementRecord = { id: movementRef.id, inventoryId: inventory.id, sku: inventory.sku, locationId: inventory.locationId, movementType: 'SALE', quantityDelta: -line.quantity, quantityBefore: inventory.quantityOnHand, quantityAfter: expectedAfter, referenceId: data.orderId, performedBy: actor, timestamp: new Date().toISOString() };
+
+      if (existingMovement) {
+        if (!sameMovement(existingMovement, expectedMovement)) throw new HttpsError('already-exists', `operationId ${line.operationId} has already been used for another sale`);
+        const availableAfter = calculateAvailableQuantity({ quantityOnHand: existingMovement.quantityAfter, quantityReserved: inventory.quantityReserved });
+        results.push({ operationId: line.operationId, inventoryId: inventory.id, sku: inventory.sku, quantity: line.quantity, quantityBefore: existingMovement.quantityBefore, quantityAfter: existingMovement.quantityAfter, availableQuantityAfter: availableAfter, movementId: existingMovement.id });
+        continue;
+      }
+
+      const available = calculateAvailableQuantity(inventory);
+      if (line.quantity > available) throw new HttpsError('failed-precondition', `Only ${available} units are available for SKU ${line.sku}`);
+      const updated: InventoryRecord = { ...inventory, quantityOnHand: expectedAfter, updatedAt: new Date().toISOString() };
+      if (!validateInventoryRecord(updated).isValid) throw new HttpsError('failed-precondition', `Sale violates inventory invariants for SKU ${line.sku}`);
+      tx.update(inventoryRef, { quantityOnHand: updated.quantityOnHand, updatedAt: updated.updatedAt });
+      tx.create(movementRef, expectedMovement);
+      results.push({ operationId: line.operationId, inventoryId: inventory.id, sku: inventory.sku, quantity: line.quantity, quantityBefore: inventory.quantityOnHand, quantityAfter: updated.quantityOnHand, availableQuantityAfter: calculateAvailableQuantity(updated), movementId: movementRef.id });
+    }
+
+    return { orderId: data.orderId, actorId: actor, lines: results };
   });
 });

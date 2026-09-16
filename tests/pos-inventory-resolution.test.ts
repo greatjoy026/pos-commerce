@@ -1,461 +1,81 @@
-/**
- * POS-001: Authoritative POS Inventory Resolution Layer Test Suite
- *
- * Comprehensive verification of all 14 POS-001-F2 mandatory corrections:
- * 1. Canonical Variant Resolution (Product → Variant → SKU → variantId).
- *    Rejects invalid variant SKU/ID with [VARIANT_NOT_FOUND] without silent fallback to base SKU.
- *    Rejects multi-variant product checkout without explicit variant selection.
- * 2. Multi-tier Packaging / UOM Conversion:
- *    Calculates base inventory quantity (sellingQuantity × canonical multiplier).
- *    Rejects invalid/unmatched packaging units with [PACKAGING_UNIT_NOT_FOUND].
- *    Rejects fractional, zero, negative, or non-integer quantities/multipliers.
- * 3. Store / Location Resolution:
- *    Rejects missing location with [LOCATION_REQUIRED].
- *    Rejects comma-separated or unselected multiple locations with [LOCATION_AMBIGUOUS].
- * 4. Structural Service & Custom Item Discrimination:
- *    Uses structural domain properties (productType, category, trackInventory).
- *    Never uses regex on product display names (e.g., physical product "Customized Leather Jacket" is NOT treated as a service).
- * 5. Serial & Batch Lifecycle Engine Restrictions:
- *    Rejects SERIAL tracked items missing explicit serial selection with [SERIAL_SELECTION_REQUIRED].
- *    Rejects BATCH tracked items missing explicit batch selection with [BATCH_SELECTION_REQUIRED].
- * 6. Idempotency & Operation ID generation:
- *    Generates deterministic pos_<orderId>_<lineIndex> operation IDs.
- */
-
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { buildPosInventorySaleLines } from '../src/domain/pos/inventoryResolution';
+import { calculateMovementOutcome } from '../src/domain/inventory/movements';
+import type { Order, Product } from '../src/types';
 
-import {
-  resolvePosInventoryLine,
-  resolvePosCartToInventoryLines,
-  isCustomOrServiceItem,
-  normalizePosLocationId
-} from '../src/domain/pos/inventoryResolution';
-import { Product, CartItem } from '../src/types';
+const product = {
+  id: 'prod-1', name: 'Crispy Bars', sku: 'BAR-001', price: 10, stock: 100,
+  category: 'Food', location: 'Aisle 1', reorderPoint: 5, barcode: '123',
+  variants: [{ sku: 'BAR-001-CHOC', stock: 50 }],
+  packagingUnits: [{ id: 'box12', unitName: 'Box of 12', multiplier: 12, base_unit: 'piece', sellingPrice: 25 }],
+  salesCount: 0,
+} as Product;
 
-describe('POS-001-F2 — Authoritative Inventory Resolution Layer', () => {
+const canonicalVariantProduct = {
+  ...product,
+  canonical: {
+    id: 'prod-1', sku: 'BAR-001',
+    merchandising: { name: 'Crispy Bars', description: '', images: [], rating: 0, reviewCount: 0, specifications: {} },
+    classification: { category: 'Food', productType: 'Standard', tags: [] },
+    lifecycle: { status: 'Active', visibility: { publishOnline: false, sellOnPOS: true, sellOnline: false }, returnable: true },
+    variants: [{ id: 'variant-choc', productId: 'prod-1', sku: 'BAR-001-CHOC', name: 'Chocolate', attributes: { flavor: 'Chocolate' }, pricing: { retailPrice: 10 }, isActive: true }],
+  },
+} as Product;
 
-  const standardProduct: Product = {
-    id: 'prod-headphone-01',
-    name: 'Wireless Headphones',
-    sku: 'SKU-HDPH-01',
-    price: 189.00,
-    cost: 95.00,
-    stock: 25,
-    category: 'Electronics',
-    location: 'loc-main-store',
-    reorderPoint: 5,
-    barcode: '8849201901',
-    qrCode: '',
-    variants: [],
-    salesCount: 15
-  };
+const order = (item: Order['items'][number]): Order => ({
+  id: 'ord-pos-1001', date: new Date().toISOString(), items: [item], subtotal: 20, tax: 0, discount: 0, total: 20,
+  paymentMethod: 'Cash', channel: 'In-Store POS', status: 'Completed',
+});
 
-  const variantProduct: Product = {
-    id: 'prod-shirt-01',
-    name: 'Cotton Polo Shirt',
-    sku: 'SKU-SHIRT-BASE',
-    price: 35.00,
-    cost: 15.00,
-    stock: 50,
-    category: 'Apparel',
-    location: 'loc-main-store',
-    reorderPoint: 10,
-    barcode: '773910283',
-    qrCode: '',
-    variants: [
-      {
-        id: 'var-red-s',
-        sku: 'SKU-SHIRT-S-RED',
-        size: 'Small',
-        color: 'Red',
-        stock: 20,
-        retailPrice: 35.00,
-        barcode: '773910283-S-RED'
-      },
-      {
-        id: 'var-blu-m',
-        sku: 'SKU-SHIRT-M-BLU',
-        size: 'Medium',
-        color: 'Blue',
-        stock: 30,
-        retailPrice: 35.00,
-        barcode: '773910283-M-BLU'
-      }
-    ],
-    salesCount: 40
-  };
-
-  const serviceProduct: Product = {
-    id: 'prod-service-repair',
-    name: 'Screen Repair Service',
-    sku: 'SKU-SRV-REPAIR',
-    price: 85.00,
-    cost: 20.00,
-    stock: 0,
-    category: 'Services',
-    productType: 'Service',
-    location: 'loc-main-store',
-    reorderPoint: 0,
-    barcode: '',
-    qrCode: '',
-    variants: [],
-    salesCount: 100
-  };
-
-  const physicalItemWithServiceInName: Product = {
-    id: 'prod-jacket-custom',
-    name: 'Customized Service Leather Jacket',
-    sku: 'SKU-JKT-CUST',
-    price: 250.00,
-    cost: 100.00,
-    stock: 10,
-    category: 'Apparel',
-    productType: 'Standard',
-    trackInventory: true,
-    location: 'loc-main-store',
-    reorderPoint: 2,
-    barcode: '11223344',
-    qrCode: '',
-    variants: [],
-    salesCount: 5
-  };
-
-  describe('1. Canonical Variant Resolution', () => {
-    it('resolves standard single-SKU product to base SKU', () => {
-      const cartItem: CartItem = {
-        product: standardProduct,
-        quantity: 2
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-1001',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.strictEqual(res.error, undefined);
-      assert.strictEqual(res.resolvedLine?.sku, 'SKU-HDPH-01');
-      assert.strictEqual(res.resolvedLine?.productId, 'prod-headphone-01');
-      assert.strictEqual(res.resolvedLine?.variantId, undefined);
-      assert.strictEqual(res.resolvedLine?.quantity, 2);
-      assert.strictEqual(res.resolvedLine?.operationId, 'pos_ord-1001_0');
-    });
-
-    it('resolves variant product to selected variant SKU and preserves variantId', () => {
-      const cartItem: CartItem = {
-        product: variantProduct,
-        quantity: 1,
-        selectedVariantSku: 'SKU-SHIRT-M-BLU'
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-1002',
-        lineIndex: 1,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.strictEqual(res.error, undefined);
-      assert.strictEqual(res.resolvedLine?.sku, 'SKU-SHIRT-M-BLU');
-      assert.strictEqual(res.resolvedLine?.productId, 'prod-shirt-01');
-      assert.strictEqual(res.resolvedLine?.variantId, 'var-blu-m');
-      assert.strictEqual(res.resolvedLine?.quantity, 1);
-    });
-
-    it('rejects invalid selected variant SKU with [VARIANT_NOT_FOUND]', () => {
-      const cartItem: CartItem = {
-        product: variantProduct,
-        quantity: 1,
-        selectedVariantSku: 'SKU-INVALID-VARIANT-XYZ'
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-1003',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.ok(res.error?.includes('[VARIANT_NOT_FOUND]'));
-      assert.strictEqual(res.resolvedLine, undefined);
-    });
-
-    it('rejects multi-variant product checkout without explicit variant selection and prevents silent parent-SKU fallback', () => {
-      const cartItem: CartItem = {
-        product: variantProduct,
-        quantity: 1
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-1004',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.ok(res.error?.includes('[VARIANT_NOT_FOUND]'));
-      assert.strictEqual(res.resolvedLine, undefined);
-    });
+describe('POS inventory resolution', () => {
+  it('resolves a standard product SKU without inventing a client location', () => {
+    const result = buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 2, price: 10 }), [product]);
+    assert.deepEqual(result[0], { sku: 'BAR-001', productId: 'prod-1', quantity: 2, operationId: 'pos_ord-pos-1001_1' });
   });
-
-  describe('2. Multi-tier Packaging / UOM Conversion', () => {
-    it('converts selling quantity and packaging multiplier into base inventory quantity', () => {
-      const packagedProduct: Product = {
-        ...standardProduct,
-        packagingUnits: [
-          { id: 'box-6', unitName: '6-Pack Box', multiplier: 6, sellingPrice: 90.00 }
-        ]
-      };
-
-      const cartItem: CartItem = {
-        product: packagedProduct,
-        quantity: 3,
-        selectedPackagingTierId: 'box-6'
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-2001',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.strictEqual(res.resolvedLine?.quantity, 18); // 3 * 6 = 18 base units
-      assert.strictEqual(res.resolvedLine?.unitMultiplier, 6);
-      assert.strictEqual(res.resolvedLine?.sellingQuantity, 3);
-    });
-
-    it('rejects uncataloged packaging unit selection with [PACKAGING_UNIT_NOT_FOUND]', () => {
-      const packagedProduct: Product = {
-        ...standardProduct,
-        packagingUnits: [
-          { id: 'box-6', unitName: '6-Pack Box', multiplier: 6 }
-        ]
-      };
-
-      const cartItem: CartItem = {
-        product: packagedProduct,
-        quantity: 1,
-        selectedPackagingTierId: 'box-999-invalid'
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-2002',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.ok(res.error?.includes('[PACKAGING_UNIT_NOT_FOUND]'));
-    });
-
-    it('rejects zero, negative, or fractional quantity', () => {
-      const zeroItem: CartItem = { product: standardProduct, quantity: 0 };
-      const negativeItem: CartItem = { product: standardProduct, quantity: -2 };
-      const fractionalItem: CartItem = { product: standardProduct, quantity: 1.5 };
-
-      const resZero = resolvePosInventoryLine({ cartItem: zeroItem, orderId: 'ord-2003a', lineIndex: 0, storeLocationId: 'loc-main-store' });
-      const resNeg = resolvePosInventoryLine({ cartItem: negativeItem, orderId: 'ord-2003b', lineIndex: 0, storeLocationId: 'loc-main-store' });
-      const resFrac = resolvePosInventoryLine({ cartItem: fractionalItem, orderId: 'ord-2003c', lineIndex: 0, storeLocationId: 'loc-main-store' });
-
-      assert.ok(resZero.error?.includes('must be a positive integer'));
-      assert.ok(resNeg.error?.includes('must be a positive integer'));
-      assert.ok(resFrac.error?.includes('must be a positive integer'));
-    });
+  it('preserves the canonical variant ID', () => {
+    const result = buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1, price: 10, variantSku: 'BAR-001-CHOC' }), [canonicalVariantProduct]);
+    assert.equal(result[0].sku, 'BAR-001-CHOC'); assert.equal(result[0].variantId, 'variant-choc');
   });
-
-  describe('3. Store / Location Resolution', () => {
-    it('normalizes location IDs correctly', () => {
-      assert.strictEqual(normalizePosLocationId('loc-warehouse'), 'loc-warehouse');
-      assert.strictEqual(normalizePosLocationId('Store Shelf'), 'loc-store-shelf');
-      assert.strictEqual(normalizePosLocationId('Warehouse'), 'loc-warehouse');
-      assert.strictEqual(normalizePosLocationId('Store Shelf, Warehouse'), 'AMBIGUOUS');
-    });
-
-    it('returns [LOCATION_REQUIRED] when no store location context or product location exists', () => {
-      const noLocationProduct: Product = {
-        ...standardProduct,
-        location: ''
-      };
-
-      const cartItem: CartItem = {
-        product: noLocationProduct,
-        quantity: 1
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-3001',
-        lineIndex: 0
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.ok(res.error?.includes('[LOCATION_REQUIRED]'));
-    });
-
-    it('returns [LOCATION_AMBIGUOUS] when location string contains comma-separated values', () => {
-      const ambiguousProduct: Product = {
-        ...standardProduct,
-        location: 'Store Shelf, Warehouse'
-      };
-
-      const cartItem: CartItem = {
-        product: ambiguousProduct,
-        quantity: 1
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-3002',
-        lineIndex: 0
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.ok(res.error?.includes('[LOCATION_AMBIGUOUS]'));
-    });
+  it('uses the catalog packaging multiplier', () => {
+    const result = buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 2, price: 25, packagingUnitName: 'Box of 12', unitMultiplier: 12 }), [product]);
+    assert.equal(result[0].quantity, 24);
   });
-
-  describe('4. Structural Service & Custom Item Discrimination', () => {
-    it('identifies service products structurally and bypasses inventory line creation', () => {
-      const cartItem: CartItem = {
-        product: serviceProduct,
-        quantity: 1
-      };
-
-      assert.strictEqual(isCustomOrServiceItem(cartItem), true);
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-4001',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, false);
-      assert.strictEqual(res.resolvedLine, undefined);
-    });
-
-    it('does NOT treat a physical product with "Service" or "Custom" in its name as a service item', () => {
-      const cartItem: CartItem = {
-        product: physicalItemWithServiceInName,
-        quantity: 1
-      };
-
-      assert.strictEqual(isCustomOrServiceItem(cartItem), false);
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-4002',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.strictEqual(res.resolvedLine?.sku, 'SKU-JKT-CUST');
-    });
+  it('rejects a client multiplier that disagrees with the catalog', () => {
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 2, price: 25, packagingUnitName: 'Box of 12', unitMultiplier: 99 }), [product]), /does not match the catalog/);
   });
-
-  describe('5. Serial & Batch Restrictions', () => {
-    it('rejects SERIAL tracked product missing explicit serial selection with [SERIAL_SELECTION_REQUIRED]', () => {
-      const serialProduct: Product = {
-        ...standardProduct,
-        id: 'prod-laptop-serial',
-        inventoryTracking: 'SERIAL',
-        trackSerial: true
-      };
-
-      const cartItem: CartItem = {
-        product: serialProduct,
-        quantity: 1
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-5001',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.ok(res.error?.includes('[SERIAL_SELECTION_REQUIRED]'));
-    });
-
-    it('rejects BATCH tracked product missing explicit batch selection with [BATCH_SELECTION_REQUIRED]', () => {
-      const batchProduct: Product = {
-        ...standardProduct,
-        id: 'prod-pharma-batch',
-        inventoryTracking: 'BATCH',
-        trackBatch: true
-      };
-
-      const cartItem: CartItem = {
-        product: batchProduct,
-        quantity: 1
-      };
-
-      const res = resolvePosInventoryLine({
-        cartItem,
-        orderId: 'ord-5002',
-        lineIndex: 0,
-        storeLocationId: 'loc-main-store'
-      });
-
-      assert.strictEqual(res.isInventoryManaged, true);
-      assert.ok(res.error?.includes('[BATCH_SELECTION_REQUIRED]'));
-    });
+  it('rejects an unknown packaging unit', () => {
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1, price: 25, packagingUnitName: 'Box of 99' }), [product]), /Packaging unit .* could not be resolved/);
   });
-
-  describe('6. Shopping Basket Resolution & Multi-Line Atomicity', () => {
-    it('resolves a multi-item cart containing physical items and service items', () => {
-      const cart: CartItem[] = [
-        { product: standardProduct, quantity: 2 },
-        { product: variantProduct, quantity: 1, selectedVariantSku: 'SKU-SHIRT-S-RED' },
-        { product: serviceProduct, quantity: 1 }
-      ];
-
-      const res = resolvePosCartToInventoryLines(cart, 'ord-6001', 'loc-main-store');
-
-      assert.strictEqual(res.isValid, true);
-      assert.strictEqual(res.inventoryLines.length, 2); // 2 inventory items, service item omitted
-      assert.strictEqual(res.inventoryLines[0].sku, 'SKU-HDPH-01');
-      assert.strictEqual(res.inventoryLines[0].operationId, 'pos_ord-6001_0');
-      assert.strictEqual(res.inventoryLines[1].sku, 'SKU-SHIRT-S-RED');
-      assert.strictEqual(res.inventoryLines[1].variantId, 'var-red-s');
-      assert.strictEqual(res.inventoryLines[1].operationId, 'pos_ord-6001_1');
-    });
-
-    it('fails cart resolution when any single line item in the cart is invalid (multi-line atomicity guarantee)', () => {
-      const invalidCart: CartItem[] = [
-        { product: standardProduct, quantity: 1 },
-        { product: variantProduct, quantity: 1, selectedVariantSku: 'SKU-INVALID-VARIANT' }
-      ];
-
-      const res = resolvePosCartToInventoryLines(invalidCart, 'ord-6002', 'loc-main-store');
-
-      assert.strictEqual(res.isValid, false);
-      assert.ok(res.errors.length > 0);
-      assert.ok(res.errors[0].includes('[VARIANT_NOT_FOUND]'));
-    });
-
-    it('attaches canonical productId and variantId for server binding validation', () => {
-      const cart: CartItem[] = [
-        { product: variantProduct, quantity: 1, selectedVariantSku: 'SKU-SHIRT-S-RED' }
-      ];
-
-      const res = resolvePosCartToInventoryLines(cart, 'ord-6003', 'loc-main-store');
-
-      assert.strictEqual(res.isValid, true);
-      assert.strictEqual(res.inventoryLines[0].productId, 'prod-shirt-01');
-      assert.strictEqual(res.inventoryLines[0].variantId, 'var-red-s');
-      assert.strictEqual(res.inventoryLines[0].sku, 'SKU-SHIRT-S-RED');
-    });
+  it('rejects unknown products and variants instead of guessing', () => {
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'missing', productName: 'Unknown', quantity: 1, price: 10 }), [product]), /could not be resolved/);
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1, price: 10, variantSku: 'BAD' }), [product]), /could not be resolved/);
+  });
+  it('rejects fractional or non-positive POS quantities', () => {
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1.5, price: 10 }), [product]), /Invalid POS quantity/);
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 0, price: 10 }), [product]), /Invalid POS quantity/);
+  });
+  it('rejects fractional or non-positive packaging multipliers', () => {
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1, price: 10, unitMultiplier: 1.5 }), [product]), /Invalid POS packaging multiplier/);
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1, price: 10, unitMultiplier: 0 }), [product]), /Invalid POS packaging multiplier/);
+  });
+  it('does not trust the display name to classify a missing product as custom', () => {
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'missing', productName: 'Custom / Service', quantity: 1, price: 20 }), [product]), /could not be resolved/);
+  });
+  it('allows only structurally identified ad-hoc custom lines to bypass inventory', () => {
+    assert.deepEqual(buildPosInventorySaleLines(order({ productId: 'prod-custom-123', productName: 'Anything', quantity: 1, price: 20 }), [product]), []);
+  });
+  it('rejects an invalid order ID', () => {
+    assert.throws(() => buildPosInventorySaleLines({ ...order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1, price: 10 }), id: 'bad id' }, [product]), /valid POS order ID/);
+  });
+  it('rejects an empty POS order', () => {
+    assert.throws(() => buildPosInventorySaleLines({ ...order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: 1, price: 10 }), items: [] }, [product]), /at least one item/);
+  });
+  it('rejects unsafe base-unit multiplication overflow', () => {
+    assert.throws(() => buildPosInventorySaleLines(order({ productId: 'prod-1', productName: 'Crispy Bars', quantity: Number.MAX_SAFE_INTEGER, price: 10, packagingUnitName: 'Box of 12', unitMultiplier: 12 }), [product]), /Invalid base-unit quantity/);
+  });
+  it('requires an explicit movement quantity', () => {
+    const record = { id: 'inv-1', sku: 'BAR-001', productId: 'prod-1', locationId: 'loc-1', quantityOnHand: 10, quantityReserved: 0, trackingMode: 'QUANTITY' as const, status: 'ACTIVE' as const, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    assert.throws(() => calculateMovementOutcome(record, { movementType: 'SALE', performedBy: 'staff-1' }), /quantityParam must be a non-zero finite integer/);
   });
 });
