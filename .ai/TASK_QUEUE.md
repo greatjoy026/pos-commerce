@@ -2,27 +2,33 @@
 
 ## 1. Active Tasks
 
-### `POS-001 — POS Inventory Resolution Layer`
+### `ECOM-001 — Shared Catalog Contract`
 * **Priority**: P1
-* **Type**: POS / Inventory Integration / Trusted Backend Boundary
-* **Owner**: Architecture Supervisor (direct implementation while Gemini generation unavailable)
-* **Status**: `F2 IMPLEMENTED — AWAITING CI AND FINAL REVIEW`
-* **Dependencies**: `INV-001-F1.1` — APPROVED; `INV-002` — MERGED
-* **Objective**: Connect POS sale lines to canonical SKU/variant identity and the authoritative inventory movement boundary. POS must never directly mutate inventory balances or manufacture movement records.
-* **Current Implementation**: Trusted `recordPosSale` callable and POS client adapter are present. POS checkout awaits the trusted movement before finalization; legacy App-level POS stock mutation is removed; canonical variant identity and catalog packaging conversion are enforced; server-side inventory location resolution fails closed when ambiguous.
-* **Scope Boundary**: No e-commerce checkout, payment gateway integration, reservation subsystem, offline inventory synchronization, accounting, or serial/batch lifecycle engine.
+* **Type**: Shared Catalog Domain / POS + E-Commerce Integration
+* **Owner**: Architecture Supervisor
+* **Status**: `IMPLEMENTATION — VALIDATION GATE`
+* **Dependencies**: `PROD-001-F2.1` — APPROVED; `INV-002` — MERGED; `POS-001` — APPROVED/MERGED
+* **Objective**: Establish one shared Product → Variant → SKU → Packaging/UOM contract for POS and e-commerce. Consumer projections must preserve canonical IDs and must never expose inventory balances, costs, warehouse locations, or payment state.
+* **Current Implementation**: Shared catalog contract, deterministic SKU/variant resolution, catalog-defined base-unit conversion, immutable consumer-facing identity fields, and public availability-only projection are implemented under `src/domain/catalog/contract.ts`.
+* **Scope Boundary**: No payment gateway, order fulfillment engine, reservation engine, offline synchronization, accounting, or serial/batch lifecycle engine.
 
 ### `INV-002 — Ledger Movements & Transactional Allocation`
 * **Priority**: P1
 * **Type**: Domain Service / Inventory Movements
 * **Owner**: Architecture Supervisor
 * **Status**: `MERGED — APPROVED IMPLEMENTATION`
-* **Dependencies**: `INV-001-F1.1` — APPROVED
-* **Objective**: Establish the authoritative transactional inventory mutation layer using immutable movement records, Firestore transactions, integer quantity invariants, insufficient-stock protection, idempotent operation IDs, and atomic inter-location transfers.
 
 ---
 
 ## 2. Completed Tasks
+
+### `POS-001 — POS Inventory Resolution Layer`
+* **Priority**: P1
+* **Type**: POS / Inventory Integration / Trusted Backend Boundary
+* **Owner**: Architecture Supervisor
+* **Status**: `APPROVED — MERGED`
+* **Dependencies**: `INV-001-F1.1`, `INV-002`
+* **Scope**: Connect POS sale lines to canonical SKU/variant identity and the authoritative inventory movement boundary.
 
 ### `INV-001-F1.1 — Inventory Quantity & Tracking Contract Finalization`
 * **Priority**: P1
@@ -52,15 +58,10 @@
 
 ### P1 — Domain Foundations & Core Services
 
-#### `POS-001 — POS Inventory Resolution Layer`
-* **Status**: `ACTIVE — FINAL CI/REVIEW GATE`
-* **Dependencies**: `INV-002`
-* **Scope**: Connect POS to normalized inventory resolution and authoritative base-unit deduction; offline buffer remains future work unless explicitly included in its task.
-
 #### `ECOM-001 — Shared Catalog Contract`
-* **Status**: `QUEUED — BLOCKED UNTIL POS-001 APPROVAL`
+* **Status**: `ACTIVE — VALIDATION GATE`
 * **Dependencies**: `PROD-001-F2.1`, `INV-002`, `POS-001`
-* **Scope**: Refactor e-commerce to consume shared product/inventory services without duplicating domain logic.
+* **Scope**: Shared Product → Variant → SKU → Packaging/UOM contract for POS and e-commerce; public projection remains stock/cost/location safe.
 
 ### P2 — Workflows, Quality & Documentation
 
